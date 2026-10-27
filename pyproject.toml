@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools==80.9.0", "wheel==0.45.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "folder-organizer-desktop"
+version = "0.1.0"
+description = "A local-first Windows folder organizer with previews, quarantine and undo"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6-Essentials==6.10.3",
+    "Pillow==12.3.0",
+    "pypdf==6.10.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==8.4.2", "build==1.3.0"]
+bundle = ["pyinstaller==6.16.0"]
+
+[project.gui-scripts]
+folder-organizer = "folder_organizer.__main__:main"
+
+[project.scripts]
+folder-organizer-cli = "folder_organizer.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["folder_organizer*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

@@ -1,0 +1,64 @@
+name: Windows release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -e ".[dev,bundle]"
+      - run: python -m pytest -q
+      - name: Build portable desktop app
+        run: python -m PyInstaller --noconfirm --clean --onedir --windowed --name FolderOrganizer --collect-data PySide6 --copy-metadata PySide6-Essentials --copy-metadata shiboken6 --copy-metadata Pillow --copy-metadata pypdf desktop_entry.py
+      - name: Build independent update helper
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name FolderOrganizerUpdater updater_entry.py
+      - name: Include update marker
+        shell: pwsh
+        run: |
+          Copy-Item version.json dist/FolderOrganizer/
+          Copy-Item dist/FolderOrganizerUpdater.exe dist/FolderOrganizer/
+          python -c "import json; from folder_organizer import __version__; assert json.load(open('version.json'))['version'] == __version__"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ("$env:GITHUB_REF_TYPE" -eq "tag") {
+            $version = python -c "from folder_organizer import __version__; print(__version__)"
+            if ("v$version" -ne "$env:GITHUB_REF_NAME") { throw 'Version and release tag do not match' }
+          }
+      - name: Verify compiled GUI, inventory and automatic update helper
+        run: python scripts/windows_package_smoke.py
+      - name: Package and checksum
+        shell: pwsh
+        run: |
+          Copy-Item README.md,CHANGELOG.md,docs/THIRD_PARTY.md dist/FolderOrganizer/
+          Copy-Item -Recurse docs/licenses dist/FolderOrganizer/licenses
+          Compress-Archive -Path dist/FolderOrganizer -DestinationPath FolderOrganizer-Windows-x64.zip
+          $hash = (Get-FileHash FolderOrganizer-Windows-x64.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  FolderOrganizer-Windows-x64.zip" | Set-Content SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FolderOrganizer-Windows-x64
+          path: |
+            FolderOrganizer-Windows-x64.zip
+            SHA256SUMS.txt
+      - name: Publish release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$env:GITHUB_REF_NAME" *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create "$env:GITHUB_REF_NAME" --title "Folder Organizer $env:GITHUB_REF_NAME" --notes-file docs/RELEASE_NOTES.md
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          gh release upload "$env:GITHUB_REF_NAME" FolderOrganizer-Windows-x64.zip SHA256SUMS.txt --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
