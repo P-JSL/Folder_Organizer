@@ -232,3 +232,27 @@ def test_encrypted_pdf_is_unsupported_not_mislabelled_damaged(tmp_path):
     assert recovery.repair_file(source, tmp_path / "out")["status"] == "unsupported"
     assert source.read_bytes() == before
     assert not (tmp_path / "out").exists()
+
+
+def test_path_stat_creation_time_does_not_conflict_with_fstat_change_time(tmp_path, monkeypatch):
+    """Windows Python 3.12 stat/fstat expose different st_ctime semantics."""
+    from types import SimpleNamespace
+
+    source = tmp_path / "timestamps.zip"
+    make_zip(source, {"safe.txt": b"safe contents"})
+    original_stat = Path.stat
+
+    def path_stat_with_creation_time(path, *, follow_symlinks=True):
+        info = original_stat(path, follow_symlinks=follow_symlinks)
+        if path == source:
+            fields = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+            fields["st_ctime_ns"] = info.st_ctime_ns - 1_000_000_000
+            fields["st_ctime"] = info.st_ctime - 1
+            return SimpleNamespace(**fields)
+        return info
+
+    monkeypatch.setattr(Path, "stat", path_stat_with_creation_time)
+    inspection = recovery.inspect_file(source)
+    assert inspection["status"] == "healthy", inspection
+    repaired = recovery.repair_file(source, tmp_path / "out")
+    assert repaired["status"] == "repaired", repaired

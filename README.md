@@ -72,7 +72,7 @@ python3 -m venv .venv
 .venv/bin/python -m folder_organizer
 ```
 
-GUI는 로컬 데스크톱 세션에서 실행해야 개인 컴퓨터의 폴더를 선택할 수 있습니다. 클라우드 실행에서 개인 컴퓨터의 드라이브에 접근하지 않습니다. Linux 데스크톱에서 Qt의 xcb 플러그인 오류가 발생하면 배포판의 Qt/X11 런타임을 설치하세요. 자동 테스트는 `QT_QPA_PLATFORM=offscreen`을 사용합니다.
+GUI는 로컬 데스크톱 세션에서 실행해야 개인 컴퓨터의 폴더를 선택할 수 있습니다. 클라우드 실행에서 개인 컴퓨터의 드라이브에 접근하지 않습니다. Ubuntu/Debian은 기본 Qt 라이브러리로 `libegl1`, `libopengl0`가 필요하며, 데스크톱의 xcb 플러그인 오류에는 배포판의 Qt/X11 런타임도 설치하세요. 자동 테스트는 `QT_QPA_PLATFORM=offscreen`을 사용합니다.
 
 읽기 전용 분석:
 

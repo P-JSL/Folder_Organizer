@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from unittest.mock import patch
 import zipfile
 
@@ -94,8 +95,10 @@ def main() -> int:
                 assert helper.read_marker(install)["version"] == __version__
                 old_process.terminate()
                 old_process.wait(timeout=15)
-                assert update_process.wait(timeout=120) == 0, "Native update helper failed"
-                result = json.loads((Path(plan["plan_path"]).parent / "result.json").read_text(encoding="utf-8"))
+                exit_code = update_process.wait(timeout=120)
+                diagnostic = Path(plan["plan_path"]).parent / "result.json"
+                result = json.loads(diagnostic.read_text(encoding="utf-8")) if diagnostic.exists() else {}
+                assert exit_code == 0, f"Native update helper failed ({exit_code}): {result}"
                 assert result["status"] == "updated", result
                 assert helper.read_marker(install)["version"] == next_version
                 assert helper.read_marker(Path(result["backup"]))["version"] == __version__
@@ -113,4 +116,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except Exception:
+        message = traceback.format_exc().replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print("::error title=Compiled Windows package check::" + message)
+        raise

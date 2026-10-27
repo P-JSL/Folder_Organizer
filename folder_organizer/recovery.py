@@ -87,8 +87,20 @@ def _source_snapshot(path: str | Path) -> tuple[Path, bytes, tuple[int, ...]]:
 
 def _unchanged(source: Path, fingerprint: tuple[int, ...]) -> None:
     _no_symlinks(source)
-    if _signature(source.stat(follow_symlinks=False)) != fingerprint:
-        raise RecoveryError("검사 이후 원본이 변경되어 작업을 중단했습니다.")
+    # Compare metadata through the same API used for the original snapshot.
+    # CPython 3.12 on Windows exposes creation time as Path.stat().st_ctime,
+    # while os.fstat().st_ctime contains FILE_BASIC_INFO.ChangeTime. Comparing
+    # those unlike timestamps falsely rejects unchanged files. Reopening and
+    # fstat'ing preserves both identity and the actual change-time guard.
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(source, flags)
+    try:
+        current = os.fstat(descriptor)
+        if not stat.S_ISREG(current.st_mode) or _signature(current) != fingerprint:
+            raise RecoveryError("검사 이후 원본이 변경되어 작업을 중단했습니다.")
+    finally:
+        os.close(descriptor)
+    _no_symlinks(source)
 
 
 def _archive_name(name: str) -> bool:
