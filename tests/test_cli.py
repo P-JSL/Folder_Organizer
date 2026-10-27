@@ -38,7 +38,7 @@ def test_json_report_supports_windowed_binary_without_stdout(tmp_path, monkeypat
     output = tmp_path / "report.json"
     monkeypatch.setattr(sys, "stdout", None)
     assert main([str(root), "--duplicates", "--json", str(output)]) == 0
-    assert len(json.loads(output.read_text())["duplicates"]) == 1
+    assert len(json.loads(output.read_text(encoding="utf-8"))["duplicates"]) == 1
     assert main([str(root), "--json", str(output)]) == 2
 
 
@@ -65,3 +65,28 @@ def test_cli_rejects_invalid_scope_without_modifying_folder(tmp_path, capsys):
     assert main([str(tmp_path), "--exclude", "../outside"]) == 2
     assert "오류" in capsys.readouterr().err
     assert [path.name for path in tmp_path.iterdir()] == ["original.txt"]
+
+
+def test_cli_preserves_unicode_json_in_legacy_windows_pipe(tmp_path, monkeypatch):
+    import io
+    import sys
+    (tmp_path / "one.txt").write_bytes(b"same")
+    buffer = io.BytesIO()
+    output = io.TextIOWrapper(buffer, encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", output)
+    assert main([str(tmp_path)]) == 0
+    output.flush()
+    report = json.loads(buffer.getvalue().decode("cp1252"))
+    assert "완전 중복" in report["definitions"]["duplicate"]
+    assert len(report["files"]) == 1
+
+
+def test_cli_errors_do_not_crash_with_legacy_windows_stderr(tmp_path, monkeypatch):
+    import io
+    import sys
+    buffer = io.BytesIO()
+    errors = io.TextIOWrapper(buffer, encoding="cp1252")
+    monkeypatch.setattr(sys, "stderr", errors)
+    assert main([str(tmp_path / "missing")]) == 2
+    errors.flush()
+    assert "missing" in buffer.getvalue().decode("cp1252")

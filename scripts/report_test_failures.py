@@ -1,5 +1,6 @@
 """Publish actionable JUnit failures as GitHub Checks annotations."""
 from pathlib import Path
+import sys
 import xml.etree.ElementTree as ET
 
 
@@ -8,6 +9,8 @@ def escape(value: str) -> str:
 
 
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     path = Path("test-results.xml")
     if not path.is_file():
         return

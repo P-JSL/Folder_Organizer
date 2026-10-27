@@ -22,7 +22,7 @@ def test_report_records_verified_evidence_and_scope_without_file_contents(tmp_pa
     assert "secret original content" not in json.dumps(report)
     output = tmp_path / "new-report.json"
     write_report(output, report)
-    assert json.loads(output.read_text())["root"] == str(tmp_path)
+    assert json.loads(output.read_text(encoding="utf-8"))["root"] == str(tmp_path)
     before = output.read_bytes()
     with pytest.raises(FileExistsError):
         write_report(output, report)
@@ -43,7 +43,7 @@ def test_html_escapes_untrusted_filenames_and_explains_score_not_probability(tmp
     assert "limit_reached" not in html
     output = tmp_path / "report.html"
     write_report(output, report)
-    assert output.read_text().startswith("<!doctype html>")
+    assert output.read_text(encoding="utf-8").startswith("<!doctype html>")
 
 
 def test_readable_report_discloses_display_limits(tmp_path):

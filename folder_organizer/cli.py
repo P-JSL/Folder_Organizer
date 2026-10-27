@@ -60,8 +60,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.html_path:
             write_report(args.html_path, output)
         if sys.stdout is not None:
+            # Redirected Windows pipes can retain a legacy code page even when
+            # report files are UTF-8. JSON escapes preserve Unicode losslessly.
+            try:
+                serialized.encode(getattr(sys.stdout, "encoding", None) or "utf-8")
+            except UnicodeEncodeError:
+                serialized = json.dumps(output, ensure_ascii=True, indent=2)
             print(serialized)
         return 0
     except (OSError, ValueError) as exc:
-        print(f"오류: {exc}", file=sys.stderr)
+        if sys.stderr is not None:
+            message = f"오류: {exc}"
+            encoding = getattr(sys.stderr, "encoding", None) or "utf-8"
+            print(message.encode(encoding, errors="backslashreplace").decode(encoding), file=sys.stderr)
         return 2
