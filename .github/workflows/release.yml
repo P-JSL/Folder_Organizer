@@ -46,6 +46,8 @@ jobs:
           Compress-Archive -Path dist/FolderOrganizer -DestinationPath FolderOrganizer-Windows-x64.zip
           $hash = (Get-FileHash FolderOrganizer-Windows-x64.zip -Algorithm SHA256).Hash.ToLower()
           "$hash  FolderOrganizer-Windows-x64.zip" | Set-Content SHA256SUMS.txt
+      - name: Verify installed v0.1.1 upgrades to this release
+        run: python scripts/windows_upgrade_compatibility.py
       - uses: actions/upload-artifact@v4
         with:
           name: FolderOrganizer-Windows-x64

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from fnmatch import fnmatchcase
+import re
 import stat
 from pathlib import Path
 from threading import Event
@@ -15,6 +17,35 @@ APPLICATION_SUFFIXES = {
     ".appimage", ".desktop", ".bat", ".cmd", ".com",
 }
 INTERNAL_NAMES = {".folder-organizer"}
+
+
+def normalize_exclude_patterns(patterns: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    """Validate bounded, relative, case-insensitive folder/name patterns."""
+    if not isinstance(patterns, (tuple, list)) or len(patterns) > 100:
+        raise ValueError("제외 패턴은 최대 100개의 목록이어야 합니다.")
+    result = []
+    for value in patterns:
+        if not isinstance(value, str):
+            raise ValueError("제외 패턴은 문자열이어야 합니다.")
+        value = value.strip().replace("\\", "/")
+        if not value:
+            continue
+        if len(value) > 512 or "\0" in value or value.startswith("/") or re.match(r"^[A-Za-z]:", value) or ".." in value.split("/"):
+            raise ValueError("제외 패턴은 '..' 없는 상대 경로 또는 이름이어야 합니다.")
+        result.append(value.rstrip("/"))
+    return tuple(dict.fromkeys(result))
+
+
+def _excluded(relative: Path, patterns: tuple[str, ...]) -> bool:
+    path = relative.as_posix().casefold()
+    for pattern in patterns:
+        pattern = pattern.casefold()
+        if "/" not in pattern:
+            if any(fnmatchcase(part.casefold(), pattern) for part in relative.parts):
+                return True
+        elif fnmatchcase(path, pattern) or fnmatchcase(path + "/", pattern):
+            return True
+    return False
 
 
 def _creation_time(info: os.stat_result) -> tuple[float | None, str]:
@@ -34,6 +65,10 @@ def scan_folder(
     include_hidden: bool = False,
     cancel: Event | None = None,
     progress: Callable[[str], None] | None = None,
+    *,
+    exclude_patterns: tuple[str, ...] | list[str] = (),
+    min_size: int = 0,
+    max_size: int | None = None,
 ) -> ScanResult:
     """Inventory regular files without following links or changing any file.
 
@@ -42,6 +77,9 @@ def scan_folder(
     inventory. macOS .app bundles are inventoried as individual application
     files, so the displayed total remains the real file byte total.
     """
+    patterns = normalize_exclude_patterns(exclude_patterns)
+    if type(min_size) is not int or min_size < 0 or (max_size is not None and (type(max_size) is not int or max_size < min_size)):
+        raise ValueError("파일 크기 범위는 0 이상의 바이트이며 최대값은 최소값 이상이어야 합니다.")
     folder = Path(os.path.abspath(os.path.expanduser(str(root))))
     if folder.is_symlink():
         raise ValueError("The selected root must be a real folder, not a symbolic link.")
@@ -53,6 +91,8 @@ def scan_folder(
     if not stat.S_ISDIR(info.st_mode):
         raise ValueError("The selected path is not a folder.")
     result = ScanResult(root=str(folder))
+    result.scan_options = {"recursive": recursive, "include_hidden": include_hidden,
+                           "exclude_patterns": list(patterns), "min_size": min_size, "max_size": max_size}
     # Iterative traversal supports deep trees without Python recursion limits.
     pending = [folder]
     seen_directories: set[tuple[int, int]] = set()
@@ -84,7 +124,7 @@ def scan_folder(
             if cancel is not None and cancel.is_set():
                 result.cancelled = True
                 break
-            if child.name in INTERNAL_NAMES:
+            if child.name.casefold() in INTERNAL_NAMES:
                 continue
             if not include_hidden and child.name.startswith("."):
                 continue
@@ -103,6 +143,9 @@ def scan_folder(
                 ):
                     continue
                 if stat.S_ISDIR(details.st_mode):
+                    if _excluded(path.relative_to(folder), patterns):
+                        result.excluded_directories += 1
+                        continue
                     if recursive:
                         pending.append(path)
                     continue
@@ -117,8 +160,11 @@ def scan_folder(
                     if not stat.S_ISREG(details.st_mode) or getattr(details, "st_file_attributes", 0) & 0x400:
                         result.warnings.append(f"Skipped changed or linked file: {path}")
                         continue
-                created, source = _creation_time(details)
                 relative = path.relative_to(folder)
+                if _excluded(relative, patterns) or details.st_size < min_size or (max_size is not None and details.st_size > max_size):
+                    result.filtered_files += 1
+                    continue
+                created, source = _creation_time(details)
                 suffix = path.suffix.casefold()
                 in_app_bundle = folder.name.casefold().endswith(".app") or any(part.casefold().endswith(".app") for part in relative.parts[:-1])
                 result.files.append(FileEntry(

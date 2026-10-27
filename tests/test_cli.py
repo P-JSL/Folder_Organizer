@@ -40,3 +40,28 @@ def test_json_report_supports_windowed_binary_without_stdout(tmp_path, monkeypat
     assert main([str(root), "--duplicates", "--json", str(output)]) == 0
     assert len(json.loads(output.read_text())["duplicates"]) == 1
     assert main([str(root), "--json", str(output)]) == 2
+
+
+def test_cli_scope_modes_and_readable_evidence_report(tmp_path, capsys):
+    root = tmp_path / "files"
+    root.mkdir()
+    (root / "invoice.txt").write_text("one")
+    (root / "invoice copy.txt").write_text("two")
+    (root / "exclude.tmp").write_text("private")
+    output = tmp_path / "comparison.html"
+    assert main([str(root), "--similar", "--similar-method", "name", "--exclude", "*.tmp", "--min-size", "2", "--html", str(output)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["schema_version"] == 2 and report["filtered_files"] == 1
+    assert report["comparison_report"]["methods"] == ["name"]
+    assert len(report["similar"]) == 1
+    assert report["similar"][0]["evidence"]["matched_signals"] == ["name"]
+    assert report["similar"][0]["evidence"]["byte_identical"] is False
+    assert "유사 후보" in output.read_text(encoding="utf-8")
+    assert (root / "exclude.tmp").read_text() == "private"
+
+
+def test_cli_rejects_invalid_scope_without_modifying_folder(tmp_path, capsys):
+    (tmp_path / "original.txt").write_bytes(b"original")
+    assert main([str(tmp_path), "--exclude", "../outside"]) == 2
+    assert "오류" in capsys.readouterr().err
+    assert [path.name for path in tmp_path.iterdir()] == ["original.txt"]

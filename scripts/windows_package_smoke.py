@@ -45,6 +45,30 @@ def main() -> int:
         assert inventory.is_file() and "original.txt" in inventory.read_text(encoding="utf-8-sig")
         analysis = json.loads(report.read_text(encoding="utf-8"))
         assert len(analysis["files"]) == 2 and len(analysis["duplicates"]) == 1
+        assert analysis["duplicates"][0]["evidence"]["byte_identical"] is True
+        review = scratch / "review-files"
+        review.mkdir()
+        paragraph = "A careful local review compares every supported signal while keeping the original document safe for later decisions. "
+        (review / "draft.txt").write_text(paragraph, encoding="utf-8")
+        (review / "draft copy.txt").write_text(paragraph + "Revision.", encoding="utf-8")
+        (review / "Cache").mkdir()
+        (review / "Cache" / "ignored.txt").write_text(paragraph, encoding="utf-8")
+        similarity_json, similarity_html = scratch / "similarity.json", scratch / "similarity.html"
+        subprocess.run([
+            str(install / helper.APP_EXECUTABLE), "--cli", str(review), "--similar",
+            "--similar-method", "text", "--text-threshold", "0.90", "--exclude", "Cache",
+            "--json", str(similarity_json), "--html", str(similarity_html),
+        ], check=True, timeout=60)
+        comparison = json.loads(similarity_json.read_text(encoding="utf-8"))
+        assert comparison["schema_version"] == 2
+        assert comparison["excluded_directories"] == 1
+        assert comparison["comparison_report"]["methods"] == ["text"]
+        assert len(comparison["similar"]) == 1
+        candidate = comparison["similar"][0]
+        assert candidate["kind"] == "similar_text"
+        assert candidate["evidence"]["byte_identical"] is False
+        assert candidate["evidence"]["matched_signals"] == ["text"]
+        assert "동일 확률이 아니며" in similarity_html.read_text(encoding="utf-8")
         old_process = subprocess.Popen([str(install / helper.APP_EXECUTABLE)], cwd=scratch)
         update_process = None
         try:
@@ -104,7 +128,7 @@ def main() -> int:
                 assert helper.read_marker(Path(result["backup"]))["version"] == __version__
                 assert helper.file_hash(install / helper.APP_EXECUTABLE) == helper.file_hash(package / helper.APP_EXECUTABLE)
                 subprocess.run([str(install / helper.APP_EXECUTABLE), "--cli", str(source)], check=True, timeout=60)
-            print("Compiled Windows desktop, inventory export, helper wait, version swap and retained backup verified")
+            print("Compiled Windows desktop, exact/similar evidence, scope filters, JSON/HTML exports, helper wait, version swap and retained backup verified")
         finally:
             if old_process.poll() is None:
                 old_process.terminate()

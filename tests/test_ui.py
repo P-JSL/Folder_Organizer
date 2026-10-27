@@ -104,13 +104,14 @@ def test_selection_persists_filter_and_visible_selection_is_explicit(window, tmp
     assert window.selected_paths() == [entry.path]
 
 
-def test_only_exact_groups_offer_keep_first_selection(window, tmp_path):
+def test_only_exact_groups_offer_keep_first_selection(app, window, tmp_path):
     result = populate(window, tmp_path)
     paths = [entry.path for entry in result.files[:2]]
     group = MatchGroup("duplicate", paths, "SHA-256 + byte comparison", 1.0)
     window._load_groups([group], "duplicate")
     assert window.select_duplicates_button.isEnabled()
     window.select_duplicate_candidates()
+    wait_for_task(app, window)
     assert window.selected_paths() == paths[1:]
     window._load_groups([MatchGroup("similar", paths, "이름 유사 후보", 0.9)], "similar")
     assert not window.select_duplicates_button.isEnabled()
@@ -265,6 +266,7 @@ def test_gui_duplicate_preview_quarantine_and_undo_workflow(app, window, tmp_pat
     wait_for_task(app, window)
     assert len(window.groups) == 1
     window.select_duplicate_candidates()
+    wait_for_task(app, window)
     assert len(window.selected_paths()) == 1
     chosen = Path(window.selected_paths()[0])
     results = []

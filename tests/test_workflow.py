@@ -44,3 +44,48 @@ def test_damaged_archive_recovery_returns_new_verified_partial_file(tmp_path):
     with zipfile.ZipFile(output["output"]) as recovered:
         assert recovered.read("intact.txt") == b"precious content"
         assert "lost.txt" not in recovered.namelist()
+
+
+def test_protected_photo_review_selection_report_and_undo_work_together(tmp_path):
+    from PIL import Image
+    from folder_organizer.comparison import compare_files
+    from folder_organizer.matching import find_similar
+    from folder_organizer.reporting import build_report, write_report
+    from folder_organizer.retention import choose_duplicate_copies
+
+    root = tmp_path / "Personal"
+    protected, downloads, ignored = root / "Originals", root / "Downloads", root / "Cache"
+    for directory in (protected, downloads, ignored):
+        directory.mkdir(parents=True)
+    original, copy, resized = protected / "photo.png", downloads / "photo copy.png", downloads / "resized.jpg"
+    image = Image.new("RGB", (48, 48))
+    image.putdata([(x * 5, y * 5, 80) for y in range(48) for x in range(48)])
+    image.save(original)
+    copy.write_bytes(original.read_bytes())
+    image.resize((96, 96)).save(resized, quality=95)
+    image.close()
+    (ignored / "not-scanned.txt").write_bytes(b"excluded private data")
+
+    scan = scan_folder(root, exclude_patterns=["Cache"])
+    duplicates = find_duplicates(scan.files)
+    assert len(duplicates) == 1
+    diagnostics = {}
+    similar = find_similar(scan.files, methods=("image",), image_threshold=.9, report=diagnostics)
+    assert similar and all(group.kind == "similar_image" for group in similar)
+    assert all(group.evidence["byte_identical"] is False for group in similar)
+    assert diagnostics["exact_pairs_excluded"] == 1
+    entries = {entry.path: entry for entry in scan.files}
+    comparison = compare_files(entries[str(original)], entries[str(resized)])
+    assert comparison["byte_identical"] is False
+    assert comparison["left_preview"] and comparison["right_preview"]
+    selection = choose_duplicate_copies(duplicates, scan.files, rule="newest", protected_folders=[str(protected)])
+    assert selection["selected"] == [str(copy)] and str(original) in selection["kept"]
+    report = build_report(scan, duplicates=duplicates, similar=similar, comparison_report=diagnostics, selection=selection)
+    write_report(tmp_path / "review.html", report)
+    assert "동일 확률이 아니며" in (tmp_path / "review.html").read_text(encoding="utf-8")
+    snapshot = original.read_bytes()
+    journal = execute_plan(build_plan(root, selection["selected"], "quarantine"))
+    assert journal["status"] == "completed" and original.read_bytes() == snapshot and not copy.exists()
+    assert undo_operation(root, journal["id"])["status"] == "undone"
+    assert copy.read_bytes() == original.read_bytes() == snapshot
+    assert (ignored / "not-scanned.txt").read_bytes() == b"excluded private data"

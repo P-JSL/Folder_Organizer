@@ -184,6 +184,17 @@ def find_duplicates(
                             kind="duplicate", paths=[entry.path for entry in bucket],
                             reason=f"Same {bucket[0].size:,} bytes; SHA-256 and byte comparison verified ({digest[:12]}). Hardlink aliases excluded.",
                             score=1.0,
+                            evidence={
+                                "byte_identical": True,
+                                "matched_signals": ["exact"],
+                                "name_score": None, "text_score": None, "image_score": None,
+                                "name_threshold": None, "text_threshold": None, "image_threshold": None,
+                                "sha256": digest, "size_bytes": bucket[0].size,
+                                "limitations": [
+                                    "파일 내용이 같다는 판정이며, 사용 중인 경로나 파일의 필요성을 판단하지 않습니다.",
+                                    "이름·수정일·생성일이 달라도 파일 내용이 모두 같으면 완전 중복입니다.",
+                                ],
+                            },
                         ))
     except _Cancelled:
         return []
@@ -239,7 +250,45 @@ def _cached(cache: OrderedDict, entry: FileEntry, loader: Callable):
     return value
 
 
-def _image_signature(entry: FileEntry) -> tuple[int, tuple[int, ...], float] | None:
+def _has_alpha(image) -> bool:
+    return "A" in image.getbands() or "transparency" in image.info
+
+
+def _visual_signature(image) -> tuple[int, tuple[int, ...], float, tuple[int, ...]]:
+    """Keep RGB scoring stable and independently account for opacity changes."""
+    rgb = image if image.mode == "RGB" else image.convert("RGB")
+    try:
+        gray = rgb.convert("L").resize((9, 8)).tobytes()
+        bits = 0
+        for y in range(8):
+            for x in range(8):
+                bits = (bits << 1) | (gray[y * 9 + x] > gray[y * 9 + x + 1])
+        pixels = tuple(rgb.resize((16, 16)).tobytes())
+    finally:
+        if rgb is not image:
+            rgb.close()
+    alpha = (255,) * 256
+    if _has_alpha(image):
+        rgba = image if image.mode == "RGBA" else image.convert("RGBA")
+        try:
+            with rgba.getchannel("A") as channel:
+                alpha = tuple(channel.resize((16, 16)).tobytes())
+        finally:
+            if rgba is not image:
+                rgba.close()
+    return bits, pixels, image.width / image.height, alpha
+
+
+def _image_similarity(first, second) -> float | None:
+    if abs(math.log(first[2] / second[2])) > .1:
+        return None
+    hash_score = 1 - (first[0] ^ second[0]).bit_count() / 64
+    color_score = 1 - sum(abs(a - b) for a, b in zip(first[1], second[1])) / (255 * len(first[1]))
+    alpha_score = 1 - sum(abs(a - b) for a, b in zip(first[3], second[3])) / (255 * len(first[3]))
+    return min(hash_score, color_score, alpha_score)
+
+
+def _image_signature(entry: FileEntry) -> tuple[int, tuple[int, ...], float, tuple[int, ...]] | None:
     if entry.suffix not in IMAGE_SUFFIXES:
         return None
     try:
@@ -252,14 +301,8 @@ def _image_signature(entry: FileEntry) -> tuple[int, tuple[int, ...], float] | N
             with _open_snapshot(entry) as stream, Image.open(stream) as source:
                 if source.width * source.height > 40_000_000 or source.width <= 0 or source.height <= 0:
                     return None
-                image = ImageOps.exif_transpose(source).convert("RGB")
-                gray = image.convert("L").resize((9, 8)).tobytes()
-                bits = 0
-                for y in range(8):
-                    for x in range(8):
-                        bits = (bits << 1) | (gray[y * 9 + x] > gray[y * 9 + x + 1])
-                pixels = tuple(image.resize((16, 16)).tobytes())
-                return bits, pixels, image.width / image.height
+                with ImageOps.exif_transpose(source) as image:
+                    return _visual_signature(image)
     except (Image.DecompressionBombError, Image.DecompressionBombWarning):
         return None
 
@@ -268,21 +311,78 @@ def find_similar(
     files: list[FileEntry], threshold: float = 0.82,
     cancel: Event | None = None, progress: Callable[[str], None] | None = None,
     *, max_pairs: int = 25_000, max_text_bytes: int = 262_144,
+    methods: tuple[str, ...] = ("name", "text", "image"),
+    name_threshold: float | None = None, text_threshold: float | None = None,
+    image_threshold: float | None = None,
+    report: dict | None = None,
 ) -> list[MatchGroup]:
     """Suggest directly similar pairs by filename, small UTF-8 text or image.
 
     At most ``max_pairs`` same-extension pairs are compared, in stable path
     order. UTF-8 text is limited to ``max_text_bytes`` and images to 40MP.
-    Pair-limit and skipped-file notices go to ``progress``. Name suggestions
-    do not prove matching content; no suggestion is safe to delete blindly.
+    A size/hash/byte verification pass excludes exact duplicates first. The
+    pair budget bounds the following similarity stage, not this streaming exact
+    pass. Hardlink aliases are represented once. Pair-limit and skipped-file
+    notices go to ``progress``. Scores are independent method heuristics, not
+    probabilities that a file is redundant or safe to remove.
+
+    Explicit method thresholds are honored independently. For compatibility,
+    omitted text/image thresholds default to max(threshold, .90), while the
+    omitted name threshold defaults to threshold. Every result reports those
+    effective thresholds and all available enabled metrics in ``evidence``.
     """
-    if not 0.5 <= threshold <= 1:
-        raise ValueError("Similarity threshold must be between 0.5 and 1.")
-    if max_pairs < 1 or max_text_bytes < 1:
+    def checked_threshold(value: float, label: str) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.5 <= value <= 1:
+            raise ValueError(f"{label} threshold must be between 0.5 and 1.")
+        return float(value)
+
+    threshold = checked_threshold(threshold, "Similarity")
+    cutoffs = {
+        "name": checked_threshold(threshold if name_threshold is None else name_threshold, "Name"),
+        "text": checked_threshold(max(threshold, .90) if text_threshold is None else text_threshold, "Text"),
+        "image": checked_threshold(max(threshold, .90) if image_threshold is None else image_threshold, "Image"),
+    }
+    if isinstance(methods, str):
+        raise ValueError("Similarity methods must be a nonempty collection of name, text and/or image.")
+    try:
+        enabled = set(methods)
+    except TypeError as exc:
+        raise ValueError("Similarity methods must be a nonempty collection of name, text and/or image.") from exc
+    if not enabled or not enabled.issubset({"name", "text", "image"}):
+        raise ValueError("Similarity methods must contain only name, text and/or image.")
+    if any(isinstance(value, bool) or not isinstance(value, int) or value < 1
+           for value in (max_pairs, max_text_bytes)):
         raise ValueError("Comparison limits must be positive.")
+    summary = report if report is not None else {}
+    summary.clear()
+    summary.update({
+        "methods": [method for method in ("name", "text", "image") if method in enabled],
+        "thresholds": dict(cutoffs), "files_considered": 0,
+        "compared_pairs": 0, "max_pairs": max_pairs, "exact_pairs_excluded": 0,
+        "skipped_count": 0, "limit_reached": False, "cancelled": False, "warnings": [],
+    })
+    warning_keys: set[str] = set()
+
+    def notice(message: str, *, warning: bool = False, skipped: bool = False) -> None:
+        if skipped:
+            summary["skipped_count"] += 1
+        if warning and len(warning_keys) < 100 and message not in warning_keys:
+            warning_keys.add(message)
+            summary["warnings"].append(message)
+        _report(progress, message)
+
+    def exact_progress(message: str) -> None:
+        skipped = message.startswith("Skipped ")
+        notice(message, warning=skipped, skipped=skipped)
+
     results: list[MatchGroup] = []
     try:
         _check_cancel(cancel)
+        exact_groups = find_duplicates(files, cancel=cancel, progress=exact_progress)
+        _check_cancel(cancel)
+        exact_membership = {path: index for index, group in enumerate(exact_groups) for path in group.paths}
+        if exact_groups:
+            notice(f"Verified {len(exact_groups):,} exact duplicate groups; byte-identical pairs are excluded from similarity results.")
         buckets: dict[str, list[FileEntry]] = defaultdict(list)
         names: dict[str, str] = {}
         # Large folders must not retain every decoded file or image. A small
@@ -290,73 +390,138 @@ def find_similar(
         texts: OrderedDict = OrderedDict()
         images: OrderedDict = OrderedDict()
         seen_paths: set[str] = set()
+        seen_inodes: set[tuple[int, int]] = set()
         for entry in sorted(files, key=lambda item: item.path.casefold()):
             _check_cancel(cancel)
             if entry.path in seen_paths:
                 continue
             seen_paths.add(entry.path)
+            physical = (entry.device, entry.inode)
+            if entry.inode and physical in seen_inodes:
+                continue
             try:
                 with _open_snapshot(entry):
                     pass
             except OSError as exc:
-                _report(progress, f"Skipped {entry.relative_path}: {exc}")
+                notice(f"Skipped {entry.relative_path}: {exc}", warning=True, skipped=True)
                 continue
+            if entry.inode:
+                seen_inodes.add(physical)
             key = "image" if entry.suffix in IMAGE_SUFFIXES else entry.suffix
             buckets[key].append(entry)
             names[entry.path] = _normal_name(entry)
+            summary["files_considered"] += 1
         compared = 0
         for candidates in buckets.values():
             for index, first in enumerate(candidates):
                 for second in candidates[index + 1:]:
                     _check_cancel(cancel)
                     if compared >= max_pairs:
-                        _report(progress, f"Similarity comparison limit reached ({max_pairs:,} pairs); later pairs were not checked. Narrow the folder or increase max_pairs.")
+                        summary["limit_reached"] = True
+                        notice(f"Similarity comparison limit reached ({max_pairs:,} pairs); later pairs were not checked. Narrow the folder or increase max_pairs.", warning=True)
                         return results
                     compared += 1
+                    summary["compared_pairs"] = compared
                     if first.inode and (first.device, first.inode) == (second.device, second.inode):
                         continue
-                    _report(progress, f"Comparing {first.relative_path} / {second.relative_path}")
-                    kind, score, reason = "", 0.0, ""
+                    notice(f"Comparing {first.relative_path} / {second.relative_path}")
+                    first_exact, second_exact = exact_membership.get(first.path), exact_membership.get(second.path)
+                    if first_exact is not None and first_exact == second_exact:
+                        summary["exact_pairs_excluded"] += 1
+                        continue
+                    metrics: dict[str, float | None] = {"name": None, "text": None, "image": None}
+                    limitations = [
+                        "각 점수는 해당 비교 방법의 유사도이며, 중복 확률이나 삭제해도 된다는 의미가 아닙니다.",
+                        "유사 후보는 두 파일을 직접 비교한 결과이며, 다른 후보와의 동일성을 추론하지 않습니다.",
+                    ]
                     left, right = names[first.path], names[second.path]
-                    if left and right:
-                        name_score = SequenceMatcher(None, left, right, autojunk=False).ratio()
-                        if name_score >= threshold:
-                            kind, score = "similar_name", name_score
-                            reason = "Similar normalized filenames; content equivalence is NOT established."
+                    if "name" in enabled and left and right:
+                        # Limit adversarially long input while preserving the
+                        # full path separately in the result. Typical OS names
+                        # are much shorter than this bound.
+                        metrics["name"] = SequenceMatcher(None, left[:1024], right[:1024], autojunk=False).ratio()
                     try:
-                        if first.suffix in TEXT_SUFFIXES and second.suffix in TEXT_SUFFIXES:
+                        if "text" in enabled and first.suffix in TEXT_SUFFIXES and second.suffix in TEXT_SUFFIXES:
                             a = _cached(texts, first, lambda entry: _text_signature(entry, max_text_bytes))
                             b = _cached(texts, second, lambda entry: _text_signature(entry, max_text_bytes))
                             if a and b:
-                                text_score = min(
+                                metrics["text"] = min(
                                     2 * len(a[0] & b[0]) / (len(a[0]) + len(b[0])),
                                     min(a[1], b[1]) / max(a[1], b[1]),
                                 )
-                                if text_score >= max(threshold, .90) and text_score >= score:
-                                    kind, score = "similar_text", text_score
-                                    reason = f"Similar UTF-8 text by 3-word shingle overlap (first 4,096 words; files up to {max_text_bytes:,} bytes); review both files."
-                        if first.suffix in IMAGE_SUFFIXES and second.suffix in IMAGE_SUFFIXES:
+                            else:
+                                limitations.append(f"텍스트 비교 불가: UTF-8·최소 40문자/3단어·최대 {max_text_bytes:,}바이트 범위만 지원합니다.")
+                                notice(f"Text content unsupported or outside limits: {first.relative_path} / {second.relative_path}", warning=True)
+                        elif "text" in enabled:
+                            limitations.append("이 형식의 텍스트 내용은 비교하지 않았습니다.")
+                        if "image" in enabled and first.suffix in IMAGE_SUFFIXES and second.suffix in IMAGE_SUFFIXES:
+                            limitations.append("이미지의 첫 프레임만 비교하며, GIF·WebP 등의 나머지 프레임과 움직임은 비교하지 않습니다.")
                             a = _cached(images, first, _image_signature)
                             b = _cached(images, second, _image_signature)
-                            if a and b and abs(math.log(a[2] / b[2])) <= .1:
-                                hash_score = 1 - (a[0] ^ b[0]).bit_count() / 64
-                                # Pixel colors reject the all-zero dHash false
-                                # positive for solid images of different colors.
-                                color_score = 1 - sum(abs(x - y) for x, y in zip(a[1], b[1])) / (255 * len(a[1]))
-                                image_score = min(hash_score, color_score)
-                                if image_score >= max(threshold, .90) and image_score >= score:
-                                    kind, score = "similar_image", image_score
-                                    reason = "Similar image structure, colors and aspect ratio; resized 16×16 comparison, not semantic recognition."
+                            if a and b and (image_score := _image_similarity(a, b)) is not None:
+                                metrics["image"] = image_score
+                            else:
+                                limitations.append("이미지 비교 불가: 해석 불가·40MP 초과·종횡비 차이 등의 조건을 확인하세요.")
+                                notice(f"Image content unsupported or outside limits: {first.relative_path} / {second.relative_path}", warning=True)
+                        elif "image" in enabled:
+                            limitations.append("이 형식의 이미지 내용은 비교하지 않았습니다.")
+                    except (OSError, ValueError, SyntaxError) as exc:
+                        # A meaningful name candidate may survive an unsupported
+                        # or corrupt content format; never invent its score.
+                        limitations.append(f"내용 비교를 완료하지 못했습니다: {type(exc).__name__}: {str(exc)[:160]}")
+                        notice(f"Content unavailable for {first.relative_path} / {second.relative_path}: {exc}", warning=True, skipped=True)
+                    matched = [method for method in ("name", "text", "image")
+                               if method in enabled and metrics[method] is not None and metrics[method] >= cutoffs[method]]
+                    if not matched:
+                        continue
+                    # Content evidence takes priority over filename evidence.
+                    # A normalized filename score of 1 must never hide a useful
+                    # text/image score or imply identical file contents.
+                    primary = "image" if "image" in matched else "text" if "text" in matched else "name"
+                    kind = "similar_" + primary
+                    score = float(metrics[primary])
+                    if primary == "image":
+                        reason = "Similar image structure, colors, opacity and aspect ratio; resized 16×16 comparison, not semantic recognition."
+                        limitations.append("이미지는 EXIF 방향 보정 후 구조·색·투명도·종횡비를 비교하며, 의미 인식·모든 회전/자르기/연사 판별은 지원하지 않습니다.")
+                    elif primary == "text":
+                        reason = f"Similar UTF-8 text by 3-word shingle overlap (first 4,096 words; files up to {max_text_bytes:,} bytes); review both files."
+                        limitations.append("텍스트 점수는 공백 정규화 후 앞 4,096단어의 3단어 어구 겹침과 길이 비율을 비교합니다. 문서 의미나 모든 변경을 보장하지 않습니다.")
+                    else:
+                        reason = "Similar normalized filenames; content equivalence is NOT established."
+                        limitations.append("이름 유사만으로 내용·버전·설치 프로그램의 대체 가능성을 판단할 수 없습니다.")
+                    for method, label in (("text", "텍스트"), ("image", "이미지")):
+                        if method not in enabled:
+                            limitations.append(f"{label} 내용 비교를 선택하지 않았습니다.")
+                        elif metrics[method] is not None and metrics[method] < cutoffs[method]:
+                            limitations.append(f"{label} 유사도 {metrics[method]:.1%}는 선택한 기준 {cutoffs[method]:.1%} 미만입니다.")
+                    byte_identical: bool | None = False if first.size != second.size else None
+                    if byte_identical is None:
+                        try:
+                            if _equal(first, second, cancel):
+                                summary["exact_pairs_excluded"] += 1
+                                notice(f"Byte-identical pair excluded from similarity: {first.relative_path} / {second.relative_path}")
+                                continue
+                            byte_identical = False
+                        except OSError as exc:
+                            limitations.append("바이트 비교를 완료하지 못해 완전 중복 여부는 확인되지 않았습니다.")
+                            notice(f"Byte comparison unavailable for {first.relative_path} / {second.relative_path}: {exc}", warning=True, skipped=True)
+                    try:
                         # Snapshots may have changed while cached content was
                         # compared, so validate both again before suggesting.
                         for entry in (first, second):
                             with _open_snapshot(entry):
                                 pass
                     except (OSError, ValueError, SyntaxError) as exc:
-                        _report(progress, f"Skipped pair {first.relative_path} / {second.relative_path}: {exc}")
+                        notice(f"Skipped pair {first.relative_path} / {second.relative_path}: {exc}", warning=True, skipped=True)
                         continue
-                    if kind:
-                        results.append(MatchGroup(kind=kind, paths=[first.path, second.path], reason=reason, score=score))
+                    results.append(MatchGroup(
+                        kind=kind, paths=[first.path, second.path], reason=reason, score=score,
+                        evidence={"byte_identical": byte_identical, "matched_signals": matched,
+                                  **{method + "_score": metrics[method] for method in ("name", "text", "image")},
+                                  **{method + "_threshold": cutoffs[method] for method in ("name", "text", "image")},
+                                  "limitations": limitations},
+                    ))
     except _Cancelled:
+        summary["cancelled"] = True
         return []
     return results
