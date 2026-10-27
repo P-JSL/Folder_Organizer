@@ -12,6 +12,8 @@ import math
 import os
 import re
 import stat
+import sys
+import threading
 import warnings
 from collections import OrderedDict, defaultdict
 from contextlib import contextmanager
@@ -23,6 +25,8 @@ from typing import BinaryIO, Callable, Iterator
 from .models import FileEntry, MatchGroup
 
 CHUNK_SIZE = 1024 * 1024
+SAMPLE_BYTES = 64 * 1024
+SAMPLE_MIN_SIZE = 1024 * 1024
 TEXT_SUFFIXES = {
     ".txt", ".md", ".csv", ".tsv", ".json", ".yaml", ".yml", ".xml",
     ".html", ".htm", ".css", ".js", ".ts", ".py", ".ini", ".log",
@@ -80,8 +84,11 @@ def _open_snapshot(entry: FileEntry) -> Iterator[BinaryIO]:
             raise OSError("File changed since the folder scan; rescan first")
         with os.fdopen(descriptor, "rb") as stream:
             descriptor = None
+            before = os.fstat(stream.fileno())
             yield stream
-            if not _snapshot_matches(entry, os.fstat(stream.fileno())):
+            after = os.fstat(stream.fileno())
+            if (not _snapshot_matches(entry, after)
+                    or before.st_ctime_ns != after.st_ctime_ns):
                 raise OSError("File changed while being read; rescan first")
             if not _snapshot_matches(entry, os.stat(path, follow_symlinks=False)):
                 raise OSError("File path changed while being read; rescan first")
@@ -95,6 +102,97 @@ def _open_snapshot(entry: FileEntry) -> Iterator[BinaryIO]:
 def _report(progress: Callable[[str], None] | None, message: str) -> None:
     if progress is not None:
         progress(message)
+
+
+def _detail(callback: Callable[[dict], None] | None, phase: str, completed: int,
+            total: int | None, unit: str, message: str, *, terminal=False) -> None:
+    if callback is not None:
+        callback({"phase": phase, "completed": completed, "total": total,
+                  "unit": unit, "message": message, "terminal": terminal})
+
+
+def _sample_digest(entry: FileEntry, cancel: Event | None) -> str:
+    """Reject differing large files cheaply; samples never prove duplication."""
+    digest = hashlib.sha256()
+    offsets = (0, (entry.size - SAMPLE_BYTES) // 2, entry.size - SAMPLE_BYTES)
+    with _open_snapshot(entry) as stream:
+        for offset in offsets:
+            _check_cancel(cancel)
+            stream.seek(offset)
+            digest.update(stream.read(SAMPLE_BYTES))
+    _check_cancel(cancel)
+    return digest.hexdigest()
+
+
+class AnalysisCache:
+    """Bounded in-memory text/image features; full duplicate hashes are not cached.
+
+    Explicit session ownership avoids trusting a persistent cache after restart.
+    Every lookup opens the current snapshot and includes its descriptor ctime,
+    so even a same-size edit which restores mtime invalidates an older feature.
+    """
+    def __init__(self, max_bytes: int = 32 * 1024 * 1024, max_entries: int = 512):
+        if type(max_bytes) is not int or type(max_entries) is not int or min(max_bytes, max_entries) < 1:
+            raise ValueError("Cache limits must be positive integers")
+        self.max_bytes, self.max_entries = max_bytes, max_entries
+        self._values: OrderedDict = OrderedDict()
+        self._bytes = 0
+        self._lock = threading.RLock()
+        self.hits = self.misses = 0
+
+    def clear(self) -> None:
+        with self._lock:
+            self._values.clear()
+            self._bytes = self.hits = self.misses = 0
+
+    @property
+    def bytes_used(self) -> int:
+        return self._bytes
+
+    @staticmethod
+    def _weight(value) -> int:
+        pending, seen, total = [value], set(), 0
+        while pending:
+            item = pending.pop()
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
+            total += sys.getsizeof(item)
+            if isinstance(item, (tuple, frozenset)):
+                pending.extend(item)
+        return total
+
+    def get(self, entry: FileEntry, namespace: str, loader: Callable, *, tokens: dict | None = None):
+        with _open_snapshot(entry) as stream:
+            token = os.fstat(stream.fileno()).st_ctime_ns
+        key = (namespace, entry.path, entry.size, entry.mtime_ns, entry.device, entry.inode, token)
+        with self._lock:
+            if key in self._values:
+                self.hits += 1
+                self._values.move_to_end(key)
+                if tokens is not None:
+                    tokens[entry.path] = token
+                return self._values[key][0]
+            self.misses += 1
+        value = loader(entry)
+        # Do not label a newly changed file's feature with the old token.
+        with _open_snapshot(entry) as stream:
+            if os.fstat(stream.fileno()).st_ctime_ns != token:
+                raise OSError("File changed while computing comparison features; rescan first")
+        weight = self._weight(key) + self._weight(value) + 128
+        if weight <= self.max_bytes:
+            with self._lock:
+                previous = self._values.pop(key, None)
+                if previous is not None:
+                    self._bytes -= previous[1]
+                while self._values and (len(self._values) >= self.max_entries or self._bytes + weight > self.max_bytes):
+                    _, (_, removed_weight) = self._values.popitem(last=False)
+                    self._bytes -= removed_weight
+                self._values[key] = value, weight
+                self._bytes += weight
+        if tokens is not None:
+            tokens[entry.path] = token
+        return value
 
 
 def _digest(entry: FileEntry, cancel: Event | None) -> str:
@@ -124,6 +222,7 @@ def _equal(first: FileEntry, second: FileEntry, cancel: Event | None) -> bool:
 def find_duplicates(
     files: list[FileEntry], cancel: Event | None = None,
     progress: Callable[[str], None] | None = None,
+    *, progress_detail: Callable[[dict], None] | None = None,
 ) -> list[MatchGroup]:
     """Return exact duplicate groups; inaccessible or stale snapshots are skipped.
 
@@ -137,8 +236,10 @@ def find_duplicates(
         sizes: dict[int, list[FileEntry]] = defaultdict(list)
         seen_paths: set[str] = set()
         seen_inodes: set[tuple[int, int]] = set()
-        for entry in sorted(files, key=lambda item: item.path.casefold()):
+        _detail(progress_detail, "duplicate_index", 0, len(files), "files", "중복 검사 대상을 분류합니다.")
+        for completed, entry in enumerate(sorted(files, key=lambda item: item.path.casefold()), 1):
             _check_cancel(cancel)
+            _detail(progress_detail, "duplicate_index", completed, len(files), "files", entry.relative_path)
             physical = (entry.device, entry.inode)
             if entry.path in seen_paths or (entry.inode and physical in seen_inodes):
                 continue
@@ -146,9 +247,31 @@ def find_duplicates(
             if entry.inode:
                 seen_inodes.add(physical)
             sizes[entry.size].append(entry)
-        for candidates in sizes.values():
-            if len(candidates) < 2:
+        candidates_by_size = [entries for entries in sizes.values() if len(entries) > 1]
+        sample_total = sum(len(entries) for entries in candidates_by_size if entries[0].size >= SAMPLE_MIN_SIZE)
+        sample_completed = 0
+        hash_batches: list[list[FileEntry]] = []
+        _detail(progress_detail, "duplicate_sample", 0, sample_total, "files", "큰 파일의 일부를 비교해 다른 파일을 먼저 제외합니다.")
+        for candidates in candidates_by_size:
+            if candidates[0].size < SAMPLE_MIN_SIZE:
+                hash_batches.append(candidates)
                 continue
+            samples: dict[str, list[FileEntry]] = defaultdict(list)
+            for entry in candidates:
+                _check_cancel(cancel)
+                try:
+                    _report(progress, f"Sampling {entry.relative_path}")
+                    samples[_sample_digest(entry, cancel)].append(entry)
+                except OSError as exc:
+                    _report(progress, f"Skipped {entry.relative_path}: {exc}")
+                sample_completed += 1
+                _detail(progress_detail, "duplicate_sample", sample_completed, sample_total, "files", entry.relative_path)
+            hash_batches.extend(entries for entries in samples.values() if len(entries) > 1)
+        hash_total = sum(len(entries) for entries in hash_batches)
+        hash_completed = verify_completed = 0
+        _detail(progress_detail, "duplicate_hash", 0, hash_total, "files", "남은 파일의 전체 SHA-256을 계산합니다.")
+        matching_hashes: list[tuple[str, list[FileEntry]]] = []
+        for candidates in hash_batches:
             hashes: dict[str, list[FileEntry]] = defaultdict(list)
             for entry in candidates:
                 _check_cancel(cancel)
@@ -157,46 +280,54 @@ def find_duplicates(
                     hashes[_digest(entry, cancel)].append(entry)
                 except OSError as exc:
                     _report(progress, f"Skipped {entry.relative_path}: {exc}")
-            for digest, matches in hashes.items():
-                if len(matches) < 2:
-                    continue
-                # Partition by actual content as well as hash. This also makes
-                # a fabricated/colliding digest unable to prove duplication.
-                partitions: list[list[FileEntry]] = []
-                for entry in matches:
-                    assigned = False
-                    try:
-                        for bucket in partitions:
-                            if _equal(bucket[0], entry, cancel):
-                                bucket.append(entry)
-                                assigned = True
-                                break
-                        if not assigned:
-                            # Recheck even the first member after hashing.
-                            with _open_snapshot(entry):
-                                pass
-                            partitions.append([entry])
-                    except OSError as exc:
-                        _report(progress, f"Skipped {entry.relative_path}: {exc}")
-                for bucket in partitions:
-                    if len(bucket) > 1:
-                        groups.append(MatchGroup(
-                            kind="duplicate", paths=[entry.path for entry in bucket],
-                            reason=f"Same {bucket[0].size:,} bytes; SHA-256 and byte comparison verified ({digest[:12]}). Hardlink aliases excluded.",
-                            score=1.0,
-                            evidence={
-                                "byte_identical": True,
-                                "matched_signals": ["exact"],
-                                "name_score": None, "text_score": None, "image_score": None,
-                                "name_threshold": None, "text_threshold": None, "image_threshold": None,
-                                "sha256": digest, "size_bytes": bucket[0].size,
-                                "limitations": [
-                                    "파일 내용이 같다는 판정이며, 사용 중인 경로나 파일의 필요성을 판단하지 않습니다.",
-                                    "이름·수정일·생성일이 달라도 파일 내용이 모두 같으면 완전 중복입니다.",
-                                ],
-                            },
-                        ))
+                hash_completed += 1
+                _detail(progress_detail, "duplicate_hash", hash_completed, hash_total, "files", entry.relative_path)
+            matching_hashes.extend((digest, matches) for digest, matches in hashes.items() if len(matches) > 1)
+        verify_total = sum(len(matches) for _, matches in matching_hashes)
+        _detail(progress_detail, "duplicate_verify", 0, verify_total, "files", "해시가 같은 파일의 실제 바이트를 재검증합니다.")
+        for digest, matches in matching_hashes:
+            # Partition by actual content as well as hash. This also makes
+            # a fabricated/colliding digest unable to prove duplication.
+            partitions: list[list[FileEntry]] = []
+            for entry in matches:
+                assigned = False
+                try:
+                    for bucket in partitions:
+                        if _equal(bucket[0], entry, cancel):
+                            bucket.append(entry)
+                            assigned = True
+                            break
+                    if not assigned:
+                        # Recheck even the first member after hashing.
+                        with _open_snapshot(entry):
+                            pass
+                        partitions.append([entry])
+                except OSError as exc:
+                    _report(progress, f"Skipped {entry.relative_path}: {exc}")
+                verify_completed += 1
+                _detail(progress_detail, "duplicate_verify", verify_completed, verify_total, "files", entry.relative_path)
+            for bucket in partitions:
+                if len(bucket) > 1:
+                    groups.append(MatchGroup(
+                        kind="duplicate", paths=[entry.path for entry in bucket],
+                        reason=f"Same {bucket[0].size:,} bytes; SHA-256 and byte comparison verified ({digest[:12]}). Hardlink aliases excluded.",
+                        score=1.0,
+                        evidence={
+                            "byte_identical": True,
+                            "matched_signals": ["exact"],
+                            "name_score": None, "text_score": None, "image_score": None,
+                            "name_threshold": None, "text_threshold": None, "image_threshold": None,
+                            "sha256": digest, "size_bytes": bucket[0].size,
+                            "limitations": [
+                                "파일 내용이 같다는 판정이며, 사용 중인 경로나 파일의 필요성을 판단하지 않습니다.",
+                                "이름·수정일·생성일이 달라도 파일 내용이 모두 같으면 완전 중복입니다.",
+                            ],
+                        },
+                    ))
+        _check_cancel(cancel)
+        _detail(progress_detail, "duplicate_complete", len(files), len(files), "files", "중복 검사를 완료했습니다.", terminal=True)
     except _Cancelled:
+        _detail(progress_detail, "duplicate_cancelled", 0, None, "files", "중복 검사를 중단했습니다.", terminal=True)
         return []
     return groups
 
@@ -315,6 +446,8 @@ def find_similar(
     name_threshold: float | None = None, text_threshold: float | None = None,
     image_threshold: float | None = None,
     report: dict | None = None,
+    progress_detail: Callable[[dict], None] | None = None,
+    cache: AnalysisCache | None = None,
 ) -> list[MatchGroup]:
     """Suggest directly similar pairs by filename, small UTF-8 text or image.
 
@@ -359,7 +492,7 @@ def find_similar(
         "methods": [method for method in ("name", "text", "image") if method in enabled],
         "thresholds": dict(cutoffs), "files_considered": 0,
         "compared_pairs": 0, "max_pairs": max_pairs, "exact_pairs_excluded": 0,
-        "skipped_count": 0, "limit_reached": False, "cancelled": False, "warnings": [],
+        "skipped_count": 0, "unsupported_files": 0, "limit_reached": False, "cancelled": False, "warnings": [],
     })
     warning_keys: set[str] = set()
 
@@ -376,23 +509,34 @@ def find_similar(
         notice(message, warning=skipped, skipped=skipped)
 
     results: list[MatchGroup] = []
+    features = cache if cache is not None else AnalysisCache()
+    initial_hits, initial_misses = features.hits, features.misses
+    # Content-only profiles cannot match unrelated formats. Excluding these
+    # metadata-proven ineligible files also avoids hashing or pairing them.
+    eligible_files = files if "name" in enabled else [
+        entry for entry in files
+        if ("image" in enabled and entry.suffix in IMAGE_SUFFIXES)
+        or ("text" in enabled and entry.suffix in TEXT_SUFFIXES and 40 <= entry.size <= max_text_bytes)
+    ]
+    summary["unsupported_files"] = len(files) - len(eligible_files)
+    if summary["unsupported_files"]:
+        notice(f"Content-only profile: {summary['unsupported_files']:,} files have no supported enabled comparison method and were not hashed or paired.", warning=True)
     try:
         _check_cancel(cancel)
-        exact_groups = find_duplicates(files, cancel=cancel, progress=exact_progress)
+        exact_groups = find_duplicates(eligible_files, cancel=cancel, progress=exact_progress,
+                                       progress_detail=progress_detail)
         _check_cancel(cancel)
         exact_membership = {path: index for index, group in enumerate(exact_groups) for path in group.paths}
         if exact_groups:
             notice(f"Verified {len(exact_groups):,} exact duplicate groups; byte-identical pairs are excluded from similarity results.")
         buckets: dict[str, list[FileEntry]] = defaultdict(list)
         names: dict[str, str] = {}
-        # Large folders must not retain every decoded file or image. A small
-        # LRU is sufficient for nested pair comparisons and bounds memory.
-        texts: OrderedDict = OrderedDict()
-        images: OrderedDict = OrderedDict()
         seen_paths: set[str] = set()
         seen_inodes: set[tuple[int, int]] = set()
-        for entry in sorted(files, key=lambda item: item.path.casefold()):
+        _detail(progress_detail, "similar_inventory", 0, len(eligible_files), "files", "유사 비교 대상을 확인합니다.")
+        for completed, entry in enumerate(sorted(eligible_files, key=lambda item: item.path.casefold()), 1):
             _check_cancel(cancel)
+            _detail(progress_detail, "similar_inventory", completed, len(eligible_files), "files", entry.relative_path)
             if entry.path in seen_paths:
                 continue
             seen_paths.add(entry.path)
@@ -412,16 +556,22 @@ def find_similar(
             names[entry.path] = _normal_name(entry)
             summary["files_considered"] += 1
         compared = 0
+        pair_total = sum(len(candidates) * (len(candidates) - 1) // 2 for candidates in buckets.values())
+        planned_pairs = min(pair_total, max_pairs)
+        _detail(progress_detail, "similar_pairs", 0, planned_pairs, "pairs", "이름·텍스트·이미지의 유사도를 비교합니다.")
         for candidates in buckets.values():
             for index, first in enumerate(candidates):
-                for second in candidates[index + 1:]:
+                for second_index in range(index + 1, len(candidates)):
+                    second = candidates[second_index]
                     _check_cancel(cancel)
                     if compared >= max_pairs:
                         summary["limit_reached"] = True
                         notice(f"Similarity comparison limit reached ({max_pairs:,} pairs); later pairs were not checked. Narrow the folder or increase max_pairs.", warning=True)
+                        _detail(progress_detail, "similar_limit", compared, planned_pairs, "pairs", "비교 한도에 도달했습니다. 나머지 쌍은 검사하지 않았습니다.", terminal=True)
                         return results
                     compared += 1
                     summary["compared_pairs"] = compared
+                    _detail(progress_detail, "similar_pairs", compared, planned_pairs, "pairs", f"{first.relative_path} / {second.relative_path}")
                     if first.inode and (first.device, first.inode) == (second.device, second.inode):
                         continue
                     notice(f"Comparing {first.relative_path} / {second.relative_path}")
@@ -430,6 +580,7 @@ def find_similar(
                         summary["exact_pairs_excluded"] += 1
                         continue
                     metrics: dict[str, float | None] = {"name": None, "text": None, "image": None}
+                    content_tokens: dict[str, int] = {}
                     limitations = [
                         "각 점수는 해당 비교 방법의 유사도이며, 중복 확률이나 삭제해도 된다는 의미가 아닙니다.",
                         "유사 후보는 두 파일을 직접 비교한 결과이며, 다른 후보와의 동일성을 추론하지 않습니다.",
@@ -442,8 +593,8 @@ def find_similar(
                         metrics["name"] = SequenceMatcher(None, left[:1024], right[:1024], autojunk=False).ratio()
                     try:
                         if "text" in enabled and first.suffix in TEXT_SUFFIXES and second.suffix in TEXT_SUFFIXES:
-                            a = _cached(texts, first, lambda entry: _text_signature(entry, max_text_bytes))
-                            b = _cached(texts, second, lambda entry: _text_signature(entry, max_text_bytes))
+                            a = features.get(first, f"text:{max_text_bytes}", lambda entry: _text_signature(entry, max_text_bytes), tokens=content_tokens)
+                            b = features.get(second, f"text:{max_text_bytes}", lambda entry: _text_signature(entry, max_text_bytes), tokens=content_tokens)
                             if a and b:
                                 metrics["text"] = min(
                                     2 * len(a[0] & b[0]) / (len(a[0]) + len(b[0])),
@@ -456,8 +607,8 @@ def find_similar(
                             limitations.append("이 형식의 텍스트 내용은 비교하지 않았습니다.")
                         if "image" in enabled and first.suffix in IMAGE_SUFFIXES and second.suffix in IMAGE_SUFFIXES:
                             limitations.append("이미지의 첫 프레임만 비교하며, GIF·WebP 등의 나머지 프레임과 움직임은 비교하지 않습니다.")
-                            a = _cached(images, first, _image_signature)
-                            b = _cached(images, second, _image_signature)
+                            a = features.get(first, "image:1", _image_signature, tokens=content_tokens)
+                            b = features.get(second, "image:1", _image_signature, tokens=content_tokens)
                             if a and b and (image_score := _image_similarity(a, b)) is not None:
                                 metrics["image"] = image_score
                             else:
@@ -509,8 +660,10 @@ def find_similar(
                         # Snapshots may have changed while cached content was
                         # compared, so validate both again before suggesting.
                         for entry in (first, second):
-                            with _open_snapshot(entry):
-                                pass
+                            with _open_snapshot(entry) as stream:
+                                if (entry.path in content_tokens
+                                        and os.fstat(stream.fileno()).st_ctime_ns != content_tokens[entry.path]):
+                                    raise OSError("File changed after its comparison features were read; rescan first")
                     except (OSError, ValueError, SyntaxError) as exc:
                         notice(f"Skipped pair {first.relative_path} / {second.relative_path}: {exc}", warning=True, skipped=True)
                         continue
@@ -521,7 +674,13 @@ def find_similar(
                                   **{method + "_threshold": cutoffs[method] for method in ("name", "text", "image")},
                                   "limitations": limitations},
                     ))
+        _check_cancel(cancel)
+        _detail(progress_detail, "similar_complete", compared, planned_pairs, "pairs", "유사 비교를 완료했습니다.", terminal=True)
     except _Cancelled:
         summary["cancelled"] = True
+        _detail(progress_detail, "similar_cancelled", summary["compared_pairs"], None, "pairs", "유사 비교를 중단했습니다.", terminal=True)
         return []
+    finally:
+        summary["feature_cache"] = {"hits": features.hits - initial_hits, "misses": features.misses - initial_misses,
+                                    "bytes_used": features.bytes_used, "max_bytes": features.max_bytes}
     return results

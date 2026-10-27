@@ -1,4 +1,4 @@
-"""Verify the published 0.1.1 updater can install the current Windows ZIP.
+"""Verify the published 0.2.0 updater can install the current Windows ZIP.
 
 Only disposable copies are started or replaced. The old executable and helper
 come from the public, checksum-verified release; the new payload is the exact
@@ -24,7 +24,7 @@ from PySide6.QtCore import QSettings
 from folder_organizer import __version__, updater
 from folder_organizer import updater_helper as helper
 
-PREVIOUS_VERSION = "0.1.1"
+PREVIOUS_VERSION = "0.2.0"
 
 
 @contextmanager

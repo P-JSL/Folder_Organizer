@@ -8,6 +8,7 @@ import re
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -27,7 +28,7 @@ from PySide6.QtWidgets import (
 
 from . import __version__
 from . import updater
-from .matching import find_duplicates, find_similar
+from .matching import AnalysisCache, find_duplicates, find_similar
 from .models import FileEntry, MatchGroup, ScanResult
 from .operations import build_plan, execute_plan, list_history, undo_operation
 from .recovery import inspect_file, repair_file
@@ -35,6 +36,12 @@ from .scanner import scan_folder, normalize_exclude_patterns
 from .comparison import compare_files
 from .retention import choose_duplicate_copies
 from .reporting import build_report, write_report
+from .diagnostics import configure_logging, install_exception_hook, log_event
+from .history_view import HistoryDialog
+from .log_view import LogViewerDialog
+from .progress import ProgressTracker
+from .rules import default_rules, validate_rules, build_classification_plan, build_duplicate_plan
+from .rule_view import ClassificationDialog
 
 
 STYLE = """
@@ -57,7 +64,7 @@ QPushButton#primary { background: #75dfc2; color: #0c2823; font-weight: 700; bor
 QPushButton#primary:hover { background: #9cf1da; }
 QPushButton#primary:disabled { background: #294b45; color: #77968e; border-color: #294b45; }
 QPushButton#caution { border-color: #a78449; color: #f2d293; }
-QPushButton#nav { text-align: left; border: 0; background: transparent; padding: 12px; }
+QPushButton#nav { text-align: left; border: 0; background: transparent; padding: 9px; }
 QPushButton#nav:hover { background: #1c2b36; }
 QLineEdit, QComboBox, QDoubleSpinBox { border: 1px solid #354757; border-radius: 7px; padding: 8px; background: #14212c; }
 QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus { border-color: #75dfc2; }
@@ -71,7 +78,7 @@ QHeaderView::section { padding: 10px 7px; background: #1d2c38; color: #aec1cf; b
 QTabWidget::pane { border: 0; }
 QTabBar::tab { background: #14212c; color: #93a9b9; padding: 7px 15px; border-bottom: 2px solid #263742; }
 QTabBar::tab:selected { color: #7de4ca; border-bottom-color: #7de4ca; }
-QProgressBar { border: 0; border-radius: 3px; background: #253644; max-height: 5px; }
+QProgressBar { border: 0; border-radius: 4px; background: #253644; min-height: 17px; max-height: 17px; text-align: center; font-size: 11px; }
 QProgressBar::chunk { background: #75dfc2; border-radius: 3px; }
 QToolTip { background: #24394a; color: #ffffff; border: 1px solid #6e9da4; padding: 5px; }
 QScrollBar:vertical { background: #13202a; width: 11px; }
@@ -326,6 +333,8 @@ _DETAIL_LABELS = {
     "format": "형식", "size": "파일 크기", "recovered_entries": "복구한 항목 수",
     "journal_path": "작업 기록 위치", "undo_status": "복원 상태", "undone_at": "복원 시각",
     "skipped": "건너뛴 항목", "complete": "완료", "partial": "부분 완료", "failed": "실패",
+    "classification_summary": "분류 요약", "matched": "규칙 일치", "rules": "규칙 수", "rule": "적용 규칙",
+    "retention_rule": "보존 규칙", "kept": "보존 파일", "selected": "처리할 사본",
 }
 _DETAIL_VALUES = {
     "healthy": "정상", "damaged": "손상 감지", "unsupported": "지원하지 않는 형식 또는 크기",
@@ -334,6 +343,7 @@ _DETAIL_VALUES = {
     "pending": "처리 대기", "undone": "실행 취소 완료", "conflict": "충돌 · 원본 보존",
     "skipped": "건너뜀", "copy": "복사", "move": "이동", "quarantine": "안전 보관",
     "date": "날짜별 정리", "extension": "확장자별 정리", "ok": "정상",
+    "rules": "규칙별 분류", "duplicate_auto": "검증된 중복 자동 분류",
 }
 _INTERNAL_DETAIL_FIELDS = {"signature", "sha256", "mtime_ns", "device", "inode", "version", "token", "fingerprint"}
 
@@ -369,6 +379,7 @@ def readable_details(value, indent: int = 0) -> str:
 
 class Worker(QThread):
     progress = Signal(str)
+    progress_detail = Signal(object)
 
     def __init__(self, function: Callable[["Worker"], object], parent: QObject):
         super().__init__(parent)
@@ -377,12 +388,25 @@ class Worker(QThread):
         self.result: object = None
         self.error: str | None = None
         self._last_report = 0.0
+        self._last_detail_report = 0.0
+        self._last_detail_phase = None
 
     def report(self, message: str) -> None:
         now = time.monotonic()
         if now - self._last_report >= 0.07:
             self.progress.emit(str(message))
             self._last_report = now
+
+    def report_detail(self, event: dict) -> None:
+        if not isinstance(event, dict):
+            return
+        now = time.monotonic()
+        phase = event.get("phase")
+        if (event.get("terminal") or phase != self._last_detail_phase
+                or now - self._last_detail_report >= .07):
+            self.progress_detail.emit(dict(event))
+            self._last_detail_phase = phase
+            self._last_detail_report = now
 
     def run(self) -> None:
         try:
@@ -539,17 +563,17 @@ class PlanTableModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(self.items)
 
     def columnCount(self, parent=QModelIndex()):
-        return 3
+        return 4
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
-            return ("작업", "원본", "대상")[section]
+            return ("작업", "원본", "대상", "적용 규칙")[section]
         return None
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if index.isValid() and role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
             item = self.items[index.row()]
-            value = str(item.get(("action", "source", "target")[index.column()], ""))
+            value = str(item.get(("action", "source", "target", "rule")[index.column()], ""))
             return _DETAIL_VALUES.get(value, value)
         return None
 
@@ -580,12 +604,22 @@ class MainWindow(QMainWindow):
         self._update_diagnostic_notice = ""
         self._update_retry_requested = False
         self._deferred_update_manual = False
+        self._task_id = ""
+        self._task_started = 0.0
+        self._progress_snapshot = None
+        self._progress_tracker = ProgressTracker()
+        self._analysis_cache = AnalysisCache()
+        self._history_dialog = None
+        self._log_dialog = None
         self.settings = QSettings("P-JSL", "FolderOrganizer")
         self.analysis_options = analysis_preferences(self.settings)
         self.match_report: dict = {}
         self.last_retention: dict | None = None
         self._work_controls: list[QWidget] = []
         self._build_ui()
+        self.progress_timer = QTimer(self)
+        self.progress_timer.setInterval(500)
+        self.progress_timer.timeout.connect(self._refresh_progress_time)
         self.setStyleSheet(STYLE)
         self.set_busy(False)
         self.update_timer = QTimer(self)
@@ -621,7 +655,7 @@ class MainWindow(QMainWindow):
         sidebar.setObjectName("sidebar")
         sidebar.setFixedWidth(195)
         nav = QVBoxLayout(sidebar)
-        nav.setContentsMargins(18, 28, 18, 20)
+        nav.setContentsMargins(16, 20, 16, 16)
         brand = QLabel("FOLDER\nORGANIZER")
         brand.setObjectName("brand")
         nav.addWidget(brand)
@@ -630,13 +664,19 @@ class MainWindow(QMainWindow):
         nav.addWidget(local)
         nav.addSpacing(14)
         for text, callback in (("▦  폴더 선택", self.choose_folder), ("◎  중복 파일 찾기", self.analyze_duplicates),
-                               ("≈  유사 파일 찾기", self.analyze_similar), ("↶  작업 기록 · 복원", self.show_history),
-                               ("⚙  검사 설정", self.show_analysis_settings), ("↑  업데이트 확인", self.manual_update_check),
-                               ("?  중복·유사 차이", self.show_comparison_guide), ("?  사용 안내", self.show_help)):
-            button = self._button(text, callback, work=text not in {"?  사용 안내", "?  중복·유사 차이", "↑  업데이트 확인"})
+                               ("≈  유사 파일 찾기", self.analyze_similar), ("▤  규칙으로 자동 분류", self.show_classification),
+                               ("↶  작업 기록 · 복원", self.show_history), ("≡  활동 로그", self.show_logs),
+                               ("⚙  설정 · 도움말", self.show_analysis_settings), ("↑  업데이트 확인", self.manual_update_check)):
+            button = self._button(text, callback, work=text not in {"≡  활동 로그", "↑  업데이트 확인"})
             button.setObjectName("nav")
             if text == "↑  업데이트 확인":
                 self.update_button = button
+            if text == "⚙  설정 · 도움말":
+                menu = QMenu(button)
+                menu.addAction("검사 범위 · 보존 설정", self.show_analysis_settings)
+                menu.addAction("중복과 유사의 차이", self.show_comparison_guide)
+                menu.addAction("사용 안내", self.show_help)
+                button.setMenu(menu)
             nav.addWidget(button)
         nav.addStretch()
         privacy = QLabel("내 PC에서 처리\n파일을 서버에 업로드하지\n않습니다.")
@@ -667,12 +707,14 @@ class MainWindow(QMainWindow):
         title = QLabel("내 파일, 한눈에 정리")
         title.setObjectName("title")
         titles.addWidget(title)
-        subtitle = QLabel("폴더를 살펴보고, 비교하고, 확인한 파일만 정리하세요.")
+        subtitle = QLabel("① 폴더 선택   ›   ② 분석·비교   ›   ③ 분류 미리보기   ›   ④ 안전하게 실행")
         subtitle.setObjectName("subtitle")
         titles.addWidget(subtitle)
         header.addLayout(titles)
         header.addStretch()
         self.folder_button = self._button("폴더 선택", self.choose_folder, primary=True)
+        self.folder_button.setShortcut("Ctrl+O")
+        self.folder_button.setToolTip("분석할 개인 폴더 선택 (Ctrl+O)")
         header.addWidget(self.folder_button)
         layout.addLayout(header)
 
@@ -759,6 +801,9 @@ class MainWindow(QMainWindow):
         self.select_duplicates_button = self._button("첫 파일 보존 선택", self.select_duplicate_candidates)
         self.select_duplicates_button.setToolTip("경로순 첫 파일을 보존하는 규칙입니다. 보호 폴더와 현재 내용을 다시 검증한 뒤 사본을 선택합니다. 파일 변경은 별도 미리보기에서 확인합니다.")
         match_header.addWidget(self.select_duplicates_button)
+        self.keep_first_delete_button = self._button("첫 번째 파일만 남기고 나머지 삭제", self.keep_first_delete, caution=True)
+        self.keep_first_delete_button.setToolTip("완전 중복 그룹에 표시된 첫 파일과 보호 폴더의 파일을 남깁니다. 나머지 사본은 원래 위치에서 안전 보관으로 옮기며, 작업 기록에서 복원할 수 있습니다. 영구 삭제하거나 디스크 공간을 확보하지 않습니다.")
+        match_header.addWidget(self.keep_first_delete_button)
         matches_layout.addLayout(match_header)
         compare_controls = QHBoxLayout()
         self.match_filter = QComboBox()
@@ -791,10 +836,20 @@ class MainWindow(QMainWindow):
         self.match_tree.setColumnWidth(1, 400)
         self.match_tree.itemChanged.connect(self._match_selection_changed)
         self.match_tree.itemDoubleClicked.connect(lambda *_: self.compare_current_group())
-        self.match_tree.setMinimumHeight(110)
+        self.match_tree.setMinimumHeight(86)
         matches_layout.addWidget(self.match_tree)
         self.views = QTabWidget()
-        self.views.addTab(self.table, "전체 파일")
+        self.file_page = QWidget()
+        file_layout = QVBoxLayout(self.file_page)
+        file_layout.setContentsMargins(0, 0, 0, 0)
+        self.empty_state = QLabel("폴더를 선택하고 시작하세요\n\n파일을 분석한 뒤 중복을 비교하거나 규칙으로 분류할 수 있습니다.\n실행 전에는 원본과 대상 경로를 먼저 확인합니다.")
+        self.empty_state.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_state.setObjectName("muted")
+        self.empty_state.setWordWrap(True)
+        file_layout.addWidget(self.empty_state, 1)
+        file_layout.addWidget(self.table, 1)
+        self.table.hide()
+        self.views.addTab(self.file_page, "전체 파일")
         self.views.addTab(self.match_panel, "비교 결과")
         self.views.setTabVisible(1, False)
         layout.addWidget(self.views, 1)
@@ -816,6 +871,13 @@ class MainWindow(QMainWindow):
         self.similarity_threshold.setToolTip("유사도 점수는 후보를 찾는 참고 값입니다. 내용이 같은 파일임을 보장하지 않습니다.")
         analysis.addWidget(self.similarity_threshold)
         analysis.addWidget(self._button("검사 설정", self.show_analysis_settings))
+        self.classify_button = self._button("자동 분류", self.show_classification)
+        self.classify_button.setToolTip("파일·폴더 이름, 종류, 날짜와 크기 규칙으로 분류 계획을 만듭니다. 기본은 원본을 남기는 복사입니다.")
+        classification_menu = QMenu(self.classify_button)
+        classification_menu.addAction("내 규칙으로 폴더·파일 분류", self.show_classification)
+        self.duplicate_classification_action = classification_menu.addAction("검증된 중복 자동 분류", self.classify_duplicates)
+        self.classify_button.setMenu(classification_menu)
+        analysis.addWidget(self.classify_button)
         self._work_controls.append(self.similarity_threshold)
         analysis.addStretch()
         self.recovery_menu_button = self._button("검사·복구", lambda: None)
@@ -864,7 +926,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.warning_label)
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 0)
-        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setTextVisible(True)
         self.progress_bar.hide()
         layout.addWidget(self.progress_bar)
         footer = QHBoxLayout()
@@ -872,6 +934,10 @@ class MainWindow(QMainWindow):
         self.status_label.setObjectName("muted")
         self.status_label.setWordWrap(True)
         footer.addWidget(self.status_label, 1)
+        self.progress_time_label = QLabel("")
+        self.progress_time_label.setObjectName("muted")
+        self.progress_time_label.hide()
+        footer.addWidget(self.progress_time_label)
         self.cancel_button = self._button("분석 중단", self.cancel_task, work=False)
         self.cancel_button.hide()
         footer.addWidget(self.cancel_button)
@@ -884,7 +950,7 @@ class MainWindow(QMainWindow):
     def _card(self, parent_layout, title, value):
         card = QFrame()
         card.setObjectName("card")
-        card.setFixedHeight(64)
+        card.setFixedHeight(60)
         box = QVBoxLayout(card)
         box.setContentsMargins(16, 8, 16, 8)
         title_widget = QLabel(title)
@@ -900,10 +966,16 @@ class MainWindow(QMainWindow):
         for control in self._work_controls:
             control.setEnabled(not busy)
         self.progress_bar.setVisible(busy)
+        self.progress_time_label.setVisible(busy)
+        if busy:
+            self.progress_timer.start()
+        else:
+            self.progress_timer.stop()
         self.cancel_button.setVisible(busy and cancellable)
         self.cancel_button.setEnabled(True)
         if not busy:
             self.select_duplicates_button.setEnabled(self.match_kind == "duplicate" and bool(self.groups) and self.scan_complete)
+            self.keep_first_delete_button.setEnabled(self.match_kind == "duplicate" and bool(self.groups) and self.scan_complete)
             self.retention_button.setEnabled(self.match_kind == "duplicate" and bool(self.groups) and self.scan_complete)
             self.retention_rule.setEnabled(self.match_kind == "duplicate" and bool(self.groups) and self.scan_complete)
             self.compare_button.setEnabled(bool(self.groups) and self.scan_complete)
@@ -913,6 +985,14 @@ class MainWindow(QMainWindow):
         if self._worker is not None:
             return
         self._task_label = label
+        self._task_id = uuid.uuid4().hex
+        self._task_started = time.monotonic()
+        self._progress_tracker.reset()
+        self._progress_snapshot = None
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setFormat("진행 중")
+        self.progress_time_label.setText("경과 0초")
+        log_event("task.started", label, operation_id=self._task_id)
         self._success = success
         self._failure = failure
         self._cancellable = cancellable
@@ -921,6 +1001,7 @@ class MainWindow(QMainWindow):
         worker = Worker(function, self)
         self._worker = worker
         worker.progress.connect(self.status_label.setText)
+        worker.progress_detail.connect(self._on_progress_detail)
         worker.finished.connect(self._on_worker_finished)
         worker.start()
 
@@ -939,6 +1020,10 @@ class MainWindow(QMainWindow):
         self._failure = None
         worker.deleteLater()
         self.set_busy(False)
+        elapsed = max(0.0, time.monotonic() - self._task_started)
+        log_event("task.cancelled" if cancelled else "task.failed" if error else "task.completed",
+                  error or self._task_label, level="ERROR" if error and not cancelled else "INFO",
+                  operation_id=self._task_id, details={"elapsed_seconds": round(elapsed, 2)})
         if self._close_requested:
             if error:
                 QMessageBox.warning(self, "종료 전 작업 결과", error)
@@ -963,8 +1048,56 @@ class MainWindow(QMainWindow):
             if cancelled:
                 self.status_label.setText("분석을 중단했습니다. 부분 결과는 정리에 사용할 수 없습니다. 다시 분석하세요.")
         except Exception as exc:
+            log_event("task.display_failed", f"{type(exc).__name__}: {exc}", level="ERROR", operation_id=self._task_id)
             QMessageBox.warning(self, "결과 표시 오류", f"{type(exc).__name__}: {exc}")
         self._resume_deferred_update()
+
+    @Slot(object)
+    def _on_progress_detail(self, event):
+        if self._worker is None or not isinstance(event, dict):
+            return
+        try:
+            previous = self._progress_snapshot
+            snapshot = self._progress_tracker.update(event)
+            self._progress_snapshot = snapshot
+            if snapshot.fraction is None:
+                self.progress_bar.setRange(0, 0)
+            else:
+                self.progress_bar.setRange(0, 1000)
+                self.progress_bar.setValue(round(snapshot.fraction * 1000))
+            units = {"files": "파일", "bytes": "바이트", "pairs": "비교 쌍", "items": "항목", "groups": "그룹"}
+            unit = units.get(snapshot.unit, snapshot.unit)
+            count = f"{snapshot.completed:,} / {snapshot.total:,} {unit}" if snapshot.total is not None else f"{snapshot.completed:,} {unit} 확인"
+            percent = f" · {round(snapshot.fraction * 100):d}%" if snapshot.fraction is not None else ""
+            phase_key = snapshot.phase.rsplit("_", 1)[-1]
+            phase_names = {"scan": "폴더 탐색", "index": "파일 크기 분류", "sample": "빠른 내용 비교", "hash": "전체 내용 검증", "verify": "중복 확인", "pairs": "유사 후보 비교", "inventory": "파일 준비", "rules": "분류 규칙 확인", "preview": "작업 계획 검증", "execute": "파일 처리", "undo": "파일 복원", "history": "기록 읽기", "complete": "검사 완료", "cancelled": "검사 중단", "limit": "비교 한도 도달", "preflight": "변경 전 재검증", "copy": "사본 검증", "retention": "보존 파일 확인"}
+            self.progress_bar.setFormat(phase_names.get(phase_key, "파일 처리") + " · " + count + percent)
+            if snapshot.message:
+                self.status_label.setText(snapshot.message)
+            if previous is None or previous.phase != snapshot.phase:
+                log_event("task.phase", snapshot.message or snapshot.phase, operation_id=self._task_id,
+                          details={"phase": snapshot.phase, "total": snapshot.total, "unit": snapshot.unit})
+            self._refresh_progress_time()
+        except (TypeError, ValueError, AttributeError):
+            # A progress display must never abort a verified file operation.
+            log_event("progress.invalid", "진행도 정보를 표시하지 못했습니다", level="WARNING", operation_id=self._task_id)
+
+    @Slot()
+    def _refresh_progress_time(self):
+        if self._worker is None:
+            return
+        elapsed = max(0, int(time.monotonic() - self._task_started))
+        elapsed_text = f"{elapsed // 60}분 {elapsed % 60}초" if elapsed >= 60 else f"{elapsed}초"
+        text = "경과 " + elapsed_text
+        snapshot = self._progress_snapshot
+        if snapshot is not None and snapshot.total is None:
+            unit = {"files": "파일", "bytes": "바이트", "pairs": "비교 쌍", "items": "항목", "groups": "그룹"}.get(snapshot.unit, snapshot.unit)
+            phase = "폴더 탐색" if snapshot.phase == "scan" else "처리 중"
+            text = f"{phase} · {snapshot.completed:,} {unit} 확인 · " + text
+        if snapshot is not None and snapshot.eta_seconds is not None and snapshot.fraction not in (None, 1):
+            remaining = max(1, round(snapshot.eta_seconds))
+            text += " · 현재 단계 약 " + (f"{remaining // 60}분" if remaining >= 60 else f"{remaining}초") + " 남음"
+        self.progress_time_label.setText(text)
 
     def cancel_task(self):
         if self._worker is not None and self._cancellable:
@@ -988,7 +1121,9 @@ class MainWindow(QMainWindow):
         if self._pending_update is not None:
             try:
                 updater.start_update_helper(self._pending_update)
+                log_event("update.apply_requested", "앱 종료 후 업데이트 적용 요청")
             except Exception as exc:
+                log_event("update.apply_failed", str(exc), level="ERROR")
                 self._close_requested = False
                 self.set_busy(False)
                 self.update_status.setText("업데이트 적용 시작 실패")
@@ -1067,11 +1202,13 @@ class MainWindow(QMainWindow):
                 self.deferred_update_timer.start(2000)
             return
         self.update_status.setText("새 릴리스 확인 중…")
+        log_event("update.check_started", "새 정식 버전 확인")
         def task(worker):
             release = updater.check_for_update(__version__, cancel=worker.cancel_event)
             if release is None:
                 return None
             worker.report("새 버전 다운로드 · 검증 중…")
+            log_event("update.download_started", "새 버전 다운로드와 검증 시작", details={"version": release.get("version")})
             plan = updater.prepare_update(release, updater.install_directory(), cancel=worker.cancel_event)
             return release, plan
         self._active_update_manual = manual
@@ -1093,6 +1230,7 @@ class MainWindow(QMainWindow):
         worker.deleteLater()
         self.update_button.setEnabled(True)
         if cancelled:
+            log_event("update.cancelled", "업데이트 중단 · 현재 버전 유지")
             self.update_status.setText("업데이트 중단 · 현재 버전 유지")
         elif error:
             self._update_failed(error, manual)
@@ -1103,6 +1241,7 @@ class MainWindow(QMainWindow):
 
     def _update_ready(self, result, manual: bool):
         if result is None:
+            log_event("update.current", "현재 버전이 최신 버전입니다")
             self.update_status.setText("최신 버전입니다")
             if self._worker is None:
                 self.status_label.setText("업데이트 확인 완료 · 최신 버전입니다.")
@@ -1114,6 +1253,7 @@ class MainWindow(QMainWindow):
             self.update_status.setText("자동 업데이트 꺼짐 · 현재 버전 유지")
             return
         self._pending_update = plan
+        log_event("update.ready", "새 버전 검증 완료 · 종료 후 적용", details={"version": release.get("version")})
         self.update_status.setText(f"v{release.get('version', '새 버전')} 준비 완료\n종료 후 적용합니다")
         if self._worker is None:
             self.status_label.setText("새 버전 다운로드와 검증을 마쳤습니다. 파일 작업을 마치고 종료하면 적용합니다.")
@@ -1121,6 +1261,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "업데이트 준비 완료", "새 버전을 준비했습니다. 앱 종료 후 적용하며 현재 파일 작업은 그대로 이어갈 수 있습니다.")
 
     def _update_failed(self, error: str, manual: bool):
+        log_event("update.failed", error, level="ERROR")
         self.update_status.setText("업데이트 확인 실패 · 현재 버전 유지")
         if self._worker is None:
             self.status_label.setText("업데이트 서버에 연결하지 못했거나 패키지 검증에 실패했습니다. 기존 버전으로 계속 사용할 수 있습니다.")
@@ -1150,6 +1291,7 @@ class MainWindow(QMainWindow):
             self.status_label.setText("이름 기준을 변경했습니다. 새 기준으로 유사 검사를 다시 실행하세요.")
 
     def _inventory_option_changed(self):
+        self._analysis_cache.clear()
         self.settings.setValue("analysis/recursive", self.recursive_check.isChecked())
         self.settings.setValue("analysis/hidden", self.hidden_check.isChecked())
         if self.scan_result is not None:
@@ -1186,6 +1328,7 @@ class MainWindow(QMainWindow):
         scope_changed = any(previous[key] != self.analysis_options[key] for key in ("exclude_patterns", "min_size", "max_size"))
         self._clear_match_results()
         if scope_changed and self.root:
+            self._analysis_cache.clear()
             self.start_scan()
         else:
             self.status_label.setText("검사 설정을 저장했습니다. 변경한 기준으로 중복 또는 유사 검사를 실행하세요.")
@@ -1201,6 +1344,7 @@ class MainWindow(QMainWindow):
         self.views.setCurrentIndex(0)
         self.views.setTabVisible(1, False)
         self.select_duplicates_button.setEnabled(False)
+        self.keep_first_delete_button.setEnabled(False)
         self.retention_button.setEnabled(False)
         self.retention_rule.setEnabled(False)
         self.compare_button.setEnabled(False)
@@ -1220,6 +1364,7 @@ class MainWindow(QMainWindow):
     def choose_folder(self):
         path = QFileDialog.getExistingDirectory(self, "분석할 폴더 선택", self.root or str(Path.home()))
         if path:
+            self._analysis_cache.clear()
             self.root = str(Path(path).resolve())
             self.folder_input.setText(self.root)
             self.model.set_entries([])
@@ -1243,17 +1388,24 @@ class MainWindow(QMainWindow):
         options = dict(self.analysis_options)
         self._start_task("폴더를 분석하고 있습니다…", lambda worker: scan_folder(
             root, recursive=recursive, include_hidden=hidden,
-            cancel=worker.cancel_event, progress=worker.report,
+            cancel=worker.cancel_event, progress=worker.report, progress_detail=worker.report_detail,
             exclude_patterns=tuple(options["exclude_patterns"]), min_size=options["min_size"],
             max_size=options["max_size"]), self.load_scan_result, cancellable=True)
 
     def load_scan_result(self, result: ScanResult):
         """Load a completed (or explicitly partial) scan; useful for integration tests."""
+        previous_root = self.root
         self.scan_result = result
         self.root = result.root
         self.folder_input.setText(result.root)
         self.scan_complete = not result.cancelled
+        if previous_root is not None and previous_root != result.root:
+            self._analysis_cache.clear()
         self.model.set_entries(result.files)
+        self.table.setVisible(bool(result.files))
+        self.empty_state.setVisible(not result.files)
+        if not result.files:
+            self.empty_state.setText("표시할 파일이 없습니다\n\n검사 설정의 제외 패턴·크기 조건을 확인하거나 다른 폴더를 선택하세요.")
         self.groups = []
         self.match_kind = None
         self.match_report = {}
@@ -1266,6 +1418,7 @@ class MainWindow(QMainWindow):
         self.size_label.setText(format_size(result.total_size))
         self.reclaim_label.setText("—")
         self.select_duplicates_button.setEnabled(False)
+        self.keep_first_delete_button.setEnabled(False)
         notices = [self._update_diagnostic_notice] if self._update_diagnostic_notice else []
         if result.cancelled:
             notices.append("중단된 분석입니다. 정리하려면 분석을 완료하세요.")
@@ -1328,7 +1481,7 @@ class MainWindow(QMainWindow):
             return
         files = list(self.model.entries)
         def task(worker):
-            groups = find_duplicates(files, cancel=worker.cancel_event, progress=worker.report)
+            groups = find_duplicates(files, cancel=worker.cancel_event, progress=worker.report, progress_detail=worker.report_detail)
             return groups, worker.cancel_event.is_set()
         self._start_task("SHA-256과 실제 내용을 비교하고 있습니다…", task,
                          lambda result: self._load_groups(result[0], "duplicate") if not result[1] else None,
@@ -1341,7 +1494,7 @@ class MainWindow(QMainWindow):
         options = dict(self.analysis_options)
         def task(worker):
             report = {}
-            groups = find_similar(files, cancel=worker.cancel_event, progress=worker.report,
+            groups = find_similar(files, cancel=worker.cancel_event, progress=worker.report, progress_detail=worker.report_detail, cache=self._analysis_cache,
                                   methods=tuple(options["methods"]),
                                   name_threshold=options["name_threshold"], text_threshold=options["text_threshold"],
                                   image_threshold=options["image_threshold"], report=report)
@@ -1353,6 +1506,7 @@ class MainWindow(QMainWindow):
     def _load_groups(self, groups: list[MatchGroup], kind: str, report: dict | None = None):
         self.groups = groups
         self.match_kind = kind
+        self.keep_first_delete_button.setEnabled(kind == "duplicate" and bool(groups) and self.scan_complete)
         self.match_report = dict(report or {})
         self.last_retention = None
         self.model.set_checked([])
@@ -1645,6 +1799,71 @@ class MainWindow(QMainWindow):
         outer.addWidget(buttons)
         dialog.exec()
 
+    def _classification_rules(self):
+        try:
+            saved = self.settings.value("classification/rules", "")
+            if isinstance(saved, str) and saved and len(saved) <= 128 * 1024:
+                return validate_rules(json.loads(saved))
+        except (ValueError, TypeError):
+            log_event("rules.settings_invalid", "저장된 분류 규칙을 읽지 못해 기본 규칙을 사용합니다", level="WARNING")
+        return default_rules("type")
+
+    def show_classification(self):
+        if not self._require_scan():
+            return
+        dialog = ClassificationDialog(self._classification_rules(), self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        values = dialog.values
+        self.settings.setValue("classification/rules", json.dumps(values["rules"], ensure_ascii=False))
+        scan = self.scan_result
+        protected = tuple(self.analysis_options["protected_folders"])
+        self._start_task(
+            "규칙에 맞는 파일과 안전한 대상 경로를 검증하고 있습니다…",
+            lambda worker: build_classification_plan(
+                scan, values["rules"], destination=values.get("destination"), action=values["action"],
+                protected_folders=protected, progress_detail=worker.report_detail),
+            lambda plan: self._show_preview(plan, require_confirmation=True))
+
+    def keep_first_delete(self):
+        if not self._require_scan():
+            return
+        if self.match_kind != "duplicate" or not self.groups:
+            QMessageBox.information(self, "완전 중복 검사 필요", "중복 검사를 완료한 뒤 완전 중복 결과에서 사용하세요. 유사 후보에는 적용할 수 없습니다.")
+            return
+        scan = self.scan_result
+        groups = list(self.groups)
+        protected = tuple(self.analysis_options["protected_folders"])
+        self._start_task(
+            "첫 파일과 보호 파일을 남기는 삭제 계획을 검증하고 있습니다…",
+            lambda worker: build_duplicate_plan(
+                scan, groups, retention_rule="first", preserve_first=True,
+                protected_folders=protected, progress_detail=worker.report_detail),
+            lambda plan: self._show_preview(plan, require_confirmation=True, first_only=True))
+
+    def classify_duplicates(self):
+        if not self._require_scan():
+            return
+        scan = self.scan_result
+        options = dict(self.analysis_options)
+
+        def task(worker):
+            groups = find_duplicates(list(scan.files), cancel=worker.cancel_event,
+                                     progress=worker.report, progress_detail=worker.report_detail)
+            if worker.cancel_event.is_set():
+                raise ValueError("중복 자동 분류를 중단했습니다.")
+            plan = build_duplicate_plan(
+                scan, groups, retention_rule=options["retention_rule"],
+                preferred_folder=options["preferred_folder"] or None,
+                protected_folders=tuple(options["protected_folders"]),
+                progress_detail=worker.report_detail)
+            if worker.cancel_event.is_set():
+                raise ValueError("중복 자동 분류를 중단했습니다.")
+            return plan
+
+        self._start_task("완전 중복을 확인하고 원본 보존 계획을 만들고 있습니다…", task,
+                         lambda plan: self._show_preview(plan, require_confirmation=True), cancellable=True)
+
     def preview_selected(self):
         if self._require_scan(selection=True):
             mode, basis = self.action_combo.currentData()
@@ -1672,10 +1891,10 @@ class MainWindow(QMainWindow):
             if not destination:
                 return
         self._start_task("변경 계획을 검증하고 있습니다…", lambda worker: build_plan(
-            root, paths, mode, destination=destination, date_basis=date_basis),
+            root, paths, mode, destination=destination, date_basis=date_basis, progress_detail=worker.report_detail),
             lambda plan: self._show_preview(plan, assumed=assumed))
 
-    def _show_preview(self, plan: dict, *, assumed=False):
+    def _show_preview(self, plan: dict, *, assumed=False, require_confirmation=False, first_only=False):
         items = plan.get("items", [])
         if not items:
             self._show_details("변경할 파일이 없습니다", plan)
@@ -1687,11 +1906,15 @@ class MainWindow(QMainWindow):
         text = f"총 {len(items):,}개 · {format_size(sum(item.get('size', 0) for item in items))}"
         if assumed:
             text += "\n사용자 지정: 중복 검증 없이 선택 항목 모두를 안전 보관합니다."
+        if first_only:
+            text += "\n각 완전 중복 그룹에 표시된 첫 파일과 보호 폴더의 파일을 남깁니다.\n나머지는 원래 위치에서 제거하고 안전 보관합니다. 영구 삭제가 아니며 용량은 확보되지 않습니다."
         intro = QLabel(text + "\n파일을 덮어쓰지 않으며 작업 기록에서 실행 취소할 수 있습니다.")
         intro.setWordWrap(True)
         layout.addWidget(intro)
+        if require_confirmation:
+            intro.setText(text + "\n1. 이 화면에서 원본·대상과 규칙을 확인합니다.\n2. 실행 시 파일을 다시 검증하고, 검증 사본과 복원 기록을 남깁니다. 덮어쓰지 않습니다.")
         if plan.get("warnings"):
-            warnings = QLabel("\n".join(map(str, plan["warnings"])))
+            warnings = QLabel("\n".join(map(str, plan["warnings"][:8])))
             warnings.setWordWrap(True)
             warnings.setObjectName("warning")
             layout.addWidget(warnings)
@@ -1700,21 +1923,31 @@ class MainWindow(QMainWindow):
         table.setAlternatingRowColors(True)
         table.setWordWrap(False)
         table.setColumnWidth(0, 90)
-        table.setColumnWidth(1, 400)
+        table.setColumnWidth(1, 310)
+        table.setColumnWidth(2, 360)
         table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(table, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Apply)
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("취소")
-        buttons.button(QDialogButtonBox.StandardButton.Apply).setText("확인한 작업 실행")
+        buttons.button(QDialogButtonBox.StandardButton.Apply).setText("확인한 사본 안전 보관" if first_only else "확인한 작업 실행")
+        confirmation = QCheckBox("원본·대상 경로와 보존 규칙을 확인했습니다")
+        if require_confirmation:
+            layout.addWidget(confirmation)
+            buttons.button(QDialogButtonBox.StandardButton.Apply).setEnabled(False)
+            confirmation.toggled.connect(buttons.button(QDialogButtonBox.StandardButton.Apply).setEnabled)
         buttons.rejected.connect(dialog.reject)
         buttons.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(dialog.accept)
         layout.addWidget(buttons)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._start_task("파일을 처리하고 작업 기록을 저장하고 있습니다…", lambda worker: execute_plan(plan), self._operation_done)
+        if dialog.exec() == QDialog.DialogCode.Accepted and (not require_confirmation or confirmation.isChecked()):
+            self._start_task("파일을 처리하고 작업 기록을 저장하고 있습니다…", lambda worker: execute_plan(plan, progress_detail=worker.report_detail), self._operation_done)
         else:
             self.status_label.setText("작업을 취소했습니다. 파일을 변경하지 않았습니다.")
 
     def _operation_done(self, result: dict):
+        log_event("operation.result", "파일 작업 결과", operation_id=str(result.get("id", self._task_id)),
+                  level="ERROR" if result.get("status") == "failed" else "WARNING" if result.get("status") in {"partial", "partial_undo"} else "INFO",
+                  details={"status": result.get("status"), "items": len(result.get("items", []))})
+        self._analysis_cache.clear()
         self.scan_complete = False
         self._show_details("파일 작업 결과", result)
         self.start_scan()
@@ -1815,58 +2048,66 @@ class MainWindow(QMainWindow):
         self.start_scan()
 
     def show_history(self):
+        if self._history_dialog is not None and self._history_dialog.isVisible():
+            self._history_dialog.raise_()
+            self._history_dialog.activateWindow()
+            return
         if not self.root:
             QMessageBox.information(self, "작업 기록", "기록을 확인할 원래 폴더를 선택하세요.")
             return
         root = self.root
-        self._start_task("작업 기록을 읽고 있습니다…", lambda worker: list_history(root), self._show_history)
+        self._start_task("작업 기록을 읽고 있습니다…",
+                         lambda worker: list_history(root, progress_detail=worker.report_detail),
+                         self._show_history)
 
     def _show_history(self, history: list[dict]):
-        if not history:
-            QMessageBox.information(self, "작업 기록", "이 폴더에는 저장된 정리 작업이 없습니다.")
+        # A journal contains filesystem identifiers that may exceed QVariant's
+        # signed 64-bit range on Windows. Keep records in the Python model only.
+        dialog = HistoryDialog(history, self)
+        self._history_dialog = dialog
+        root = self.root
+
+        def request_undo(operation_id: str):
+            answer = QMessageBox.question(
+                dialog, "원래 위치로 복원", "선택한 작업의 파일을 원래 위치로 복원할까요?\n"
+                "충돌하거나 변경된 파일은 덮어쓰지 않고 결과에 표시합니다.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            dialog.accept()
+            log_event("operation.undo_requested", "기록에서 복원 요청", operation_id=operation_id)
+            # Let the dialog's event handlers unwind before starting another job.
+            QTimer.singleShot(0, lambda: self._start_task(
+                "파일을 원래 위치로 복원하고 있습니다…",
+                lambda worker: undo_operation(root, operation_id, progress_detail=worker.report_detail),
+                self._operation_done))
+
+        def closed(_result):
+            if self._history_dialog is dialog:
+                self._history_dialog = None
+            dialog.deleteLater()
+
+        dialog.undo_requested.connect(request_undo)
+        dialog.finished.connect(closed)
+        dialog.open()
+
+    def show_logs(self):
+        if self._log_dialog is not None and self._log_dialog.isVisible():
+            self._log_dialog.refresh_logs()
+            self._log_dialog.raise_()
+            self._log_dialog.activateWindow()
             return
-        dialog = QDialog(self)
-        dialog.setWindowTitle("작업 기록 · 실행 취소")
-        dialog.resize(900, 540)
-        layout = QVBoxLayout(dialog)
-        label = QLabel("원래 폴더에 복원합니다. 같은 이름의 파일이 생겼거나 대상이 변경되었으면 덮어쓰지 않습니다.")
-        label.setWordWrap(True)
-        layout.addWidget(label)
-        tree = QTreeWidget()
-        tree.setHeaderLabels(("작업 ID", "시각", "방식", "상태", "항목"))
-        tree.setColumnWidth(0, 220)
-        tree.setColumnWidth(1, 190)
-        for record in history:
-            created = record.get("created_at", "")
-            if isinstance(created, (float, int)):
-                created = format_date(created)
-            item = QTreeWidgetItem((str(record.get("id", "")), str(created), _DETAIL_VALUES.get(str(record.get("mode", "")), str(record.get("mode", ""))),
-                                    _DETAIL_VALUES.get(str(record.get("status", "")), str(record.get("status", ""))), str(len(record.get("items", [])))))
-            item.setData(0, Qt.ItemDataRole.UserRole, record)
-            tree.addTopLevelItem(item)
-        layout.addWidget(tree, 1)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        undo = buttons.addButton("선택 작업 실행 취소", QDialogButtonBox.ButtonRole.ActionRole)
-        def do_undo():
-            item = tree.currentItem()
-            if item is None:
-                return
-            record = item.data(0, Qt.ItemDataRole.UserRole)
-            operation_id = record.get("id")
-            if not operation_id:
-                return
-            answer = QMessageBox.question(dialog, "실행 취소 확인", "선택한 작업의 파일을 원래 위치로 복원할까요?\n변경되거나 충돌하는 파일은 건너뜁니다.",
-                                          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                          QMessageBox.StandardButton.No)
-            if answer == QMessageBox.StandardButton.Yes:
-                dialog.accept()
-                root = self.root
-                self._start_task("변경되지 않은 파일을 원래 위치로 복원하고 있습니다…",
-                                 lambda worker: undo_operation(root, operation_id), self._operation_done)
-        undo.clicked.connect(do_undo)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-        dialog.exec()
+        dialog = LogViewerDialog(self)
+        self._log_dialog = dialog
+
+        def closed(_result):
+            if self._log_dialog is dialog:
+                self._log_dialog = None
+            dialog.deleteLater()
+
+        dialog.finished.connect(closed)
+        dialog.open()
 
     def _show_details(self, title: str, result):
         dialog = QDialog(self)
@@ -1894,6 +2135,9 @@ class MainWindow(QMainWindow):
             "중복으로 간주": "별도 버튼으로 검증 없이 사용자가 선택한 모든 파일을 안전 보관합니다. 남길 원본을 직접 확인하세요.",
             "안전 보관": "선택한 폴더의 .folder-organizer에 보관합니다. 영구 삭제하지 않으며 보관된 파일도 용량을 차지합니다.",
             "정리": "날짜별·확장자별 정리, 다른 폴더로 복사/이동을 지원합니다. 모든 변경 전 경로를 확인하세요.",
+            "규칙 자동 분류": "종류·이름·폴더·날짜·크기를 조건으로 첫 번째 일치 규칙을 적용합니다. 기본은 원본을 남기는 복사이며 규칙에 없는 파일과 보호 폴더는 건너뜁니다. 계획 확인 후에만 실행합니다.",
+            "중복 자동 분류": "완전 중복을 새로 검사하고 보존 규칙에 따라 최소 하나의 원본을 남깁니다. 선택된 사본만 안전 보관하며, 실행 직전 원본과 사본을 다시 확인합니다.",
+            "진행도와 로그": "전체 개수를 아는 단계는 개수와 비율을, 폴더 탐색은 발견 개수를 표시합니다. 경과 시간·단계별 예상 시간을 확인하고 활동 로그에서 처리 결과와 오류를 검색할 수 있습니다.",
             "실행 취소": "같은 폴더의 작업 기록에서 복원합니다. 충돌 파일과 변경된 파일을 덮어쓰지 않습니다.",
             "생성일": "운영체제가 제공하는 실제 생성일만 표시합니다. Linux 등에서는 제공되지 않을 수 있습니다.",
             "응용 프로그램": "폴더 안의 실행 파일과 설치 패키지를 표시합니다. 설치된 앱을 제거하거나 프로그램을 실행하지 않습니다.",
@@ -1905,6 +2149,9 @@ class MainWindow(QMainWindow):
 
 
 def launch() -> int:
+    configure_logging()
+    install_exception_hook()
+    log_event("application.started", f"Folder Organizer {__version__}")
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("Folder Organizer")
     app.setOrganizationName("Folder Organizer")

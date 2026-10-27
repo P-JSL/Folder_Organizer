@@ -69,6 +69,7 @@ def scan_folder(
     exclude_patterns: tuple[str, ...] | list[str] = (),
     min_size: int = 0,
     max_size: int | None = None,
+    progress_detail: Callable[[dict], None] | None = None,
 ) -> ScanResult:
     """Inventory regular files without following links or changing any file.
 
@@ -93,6 +94,19 @@ def scan_folder(
     result = ScanResult(root=str(folder))
     result.scan_options = {"recursive": recursive, "include_hidden": include_hidden,
                            "exclude_patterns": list(patterns), "min_size": min_size, "max_size": max_size}
+    total_bytes = 0
+
+    def report_detail(message: str, *, terminal: bool = False) -> None:
+        if progress_detail is not None:
+            progress_detail({"phase": "scan", "completed": len(result.files),
+                             "total": len(result.files) if terminal and not result.cancelled else None,
+                             "unit": "파일", "message": message, "bytes": total_bytes,
+                             "filtered_files": result.filtered_files,
+                             "excluded_directories": result.excluded_directories,
+                             "warnings": len(result.warnings), "terminal": terminal,
+                             "cancelled": result.cancelled})
+
+    report_detail("폴더 안의 파일을 찾고 있습니다. 전체 개수는 탐색이 끝난 뒤 확인됩니다.")
     # Iterative traversal supports deep trees without Python recursion limits.
     pending = [folder]
     seen_directories: set[tuple[int, int]] = set()
@@ -175,11 +189,14 @@ def scan_folder(
                     suffix=suffix, mtime_ns=details.st_mtime_ns,
                     device=details.st_dev, inode=details.st_ino,
                 ))
+                total_bytes += details.st_size
                 if progress is not None:
                     progress(str(relative))
+                report_detail(str(relative))
             except OSError as exc:
                 result.warnings.append(f"Cannot inspect {path}: {exc}")
         if result.cancelled:
             break
     result.files.sort(key=lambda item: item.relative_path.casefold())
+    report_detail("폴더 분석을 중단했습니다." if result.cancelled else "폴더 탐색을 완료했습니다.", terminal=True)
     return result

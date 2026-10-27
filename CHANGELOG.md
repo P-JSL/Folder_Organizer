@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — 2026-10-27
+
+- Replace recursive journal-to-Qt container conversion with a flat, bounded history model; defer restore tasks outside history callbacks.
+- Show per-phase file counts, determinate progress when totals are known, elapsed time and estimated remaining time where applicable.
+- Add bounded rotating local logs, a searchable log viewer and explicit log export.
+- Add guided, ordered classification rules and exact-duplicate quarantine plans with retained originals, protected folders and keeper revalidation.
+- Add a separate keep-first removal preview that always retains the first displayed exact duplicate and all protected files; copies remain recoverable in quarantine.
+- Reduce large equal-size nonduplicate reads with a sampled prefilter while preserving full SHA-256 and byte verification; cache bounded text/image signatures in memory with change checks.
+- Refresh the desktop workflow and keep preview, verified copies, conflict-aware undo and exit-time updates.
+
 ## 0.2.0 — 2026-10-27
 
 - Separate byte-verified duplicates from name/text/image similarity, preserving every enabled signal and its threshold.

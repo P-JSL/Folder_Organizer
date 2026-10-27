@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import stat
 from typing import Callable, Iterator
 import uuid
@@ -31,6 +32,36 @@ _BINARY = getattr(os, "O_BINARY", 0)
 
 class OperationError(ValueError):
     """A plan, path, or filesystem state cannot be used safely."""
+
+
+def _progress(callback, phase: str, completed: int, total: int | None, message: str) -> None:
+    if callback:
+        callback({"phase": phase, "completed": completed, "total": total,
+                  "unit": "files", "message": message})
+
+
+def _available_parent(path: Path) -> Path:
+    while not path.exists():
+        if path == path.parent:
+            raise OperationError("대상 드라이브를 확인할 수 없습니다.")
+        path = path.parent
+    _safe_path(path, require=True)
+    return path
+
+
+def _capacity(items: list[dict]) -> None:
+    """Require space for verified copies, without assuming retained bytes vanish."""
+    volumes: dict[int, tuple[Path, int]] = {}
+    for item in items:
+        parent = _available_parent(Path(item["target"]).parent)
+        device = parent.stat().st_dev
+        previous = volumes.get(device, (parent, 0))
+        volumes[device] = (previous[0], previous[1] + item["size"])
+    for parent, needed in volumes.values():
+        # Retained originals are not counted as reclaimed storage.
+        reserve = max(1024 * 1024, needed // 20)
+        if shutil.disk_usage(parent).free < needed + reserve:
+            raise OperationError(f"검증 복사와 안전 여유 공간이 부족합니다: {parent} (필요 {needed + reserve:,} 바이트)")
 
 
 def _json(data: dict) -> bytes:
@@ -91,7 +122,7 @@ def _root(value: str | Path) -> Path:
             directory = _absolute(system)
             if root == directory or directory in root.parents:
                 raise OperationError("시스템·설치 프로그램 폴더는 정리 대상으로 사용할 수 없습니다.")
-    if STATE_DIRECTORY in root.parts:
+    if STATE_DIRECTORY.casefold() in {part.casefold() for part in root.parts}:
         raise OperationError("복원 기록 폴더는 정리 대상으로 사용할 수 없습니다.")
     return root
 
@@ -102,7 +133,7 @@ def _inside(path: Path, root: Path) -> bool:
 
 def _source(path: str | Path, root: Path) -> Path:
     source = _absolute(path)
-    if not _inside(source, root) or STATE_DIRECTORY in source.relative_to(root).parts:
+    if not _inside(source, root) or STATE_DIRECTORY.casefold() in {part.casefold() for part in source.relative_to(root).parts}:
         raise OperationError(f"선택 폴더 밖 또는 복원 기록의 파일입니다: {source}")
     _safe_path(source, require=True)
     if not stat.S_ISREG(source.lstat().st_mode):
@@ -172,7 +203,8 @@ def _extension_folder(source: Path) -> str:
 
 
 def build_plan(root: str | Path, paths: list[str], mode: str,
-               destination: str | None = None, date_basis: str = "modified") -> dict:
+               destination: str | None = None, date_basis: str = "modified", *,
+               progress_detail: Callable[[dict], None] | None = None) -> dict:
     """Hash and preview selected regular files without modifying the filesystem.
 
     Unsupported/missing sources cause an error; files already in their intended
@@ -205,7 +237,8 @@ def build_plan(root: str | Path, paths: list[str], mode: str,
     if not selected:
         raise OperationError("정리할 파일을 선택하세요.")
     reserved: set[str] = set()
-    for source in selected:
+    _progress(progress_detail, "preview", 0, len(selected), "변경 전 파일 검증")
+    for index, source in enumerate(selected, 1):
         # Bundles are applications, not collections of independently movable
         # documents. Inventory may show their contents, but moving one member
         # would make the bundle unusable. An explicit verified copy is safe.
@@ -244,8 +277,98 @@ def build_plan(root: str | Path, paths: list[str], mode: str,
         fingerprint = _fingerprint(source)
         plan["items"].append({"source": str(source), "target": str(target),
                               "action": "copy" if mode == "copy" else "move", **fingerprint})
+        _progress(progress_detail, "preview", index, len(selected), f"미리보기 검증: {relative}")
     plan["signature"] = _sign(plan, _PLAN_KEY)
     return plan
+
+
+def build_routed_plan(root: str | Path, routes: list[dict], *,
+                      destination: str | Path | None = None,
+                      progress_detail: Callable[[dict], None] | None = None) -> dict:
+    """Build a signed classification preview from validated relative routes.
+
+    A route includes source, relative_target, action and an optional rule label.
+    No directory or file is created while making the preview.
+    """
+    directory = _root(root)
+    target_root = _absolute(destination) if destination else directory / ORGANIZED_DIRECTORY
+    _safe_path(target_root)
+    if target_root == Path(target_root.anchor) or STATE_DIRECTORY.casefold() in {part.casefold() for part in target_root.parts}:
+        raise OperationError("드라이브 전체 또는 복원 기록 폴더는 분류 대상으로 사용할 수 없습니다.")
+    if target_root.exists() and not target_root.is_dir():
+        raise OperationError("분류 대상 경로가 폴더가 아닙니다.")
+    identifier = uuid.uuid4().hex
+    plan = {"id": identifier, "root": str(directory), "mode": "rules",
+            "destination": str(target_root), "date_basis": "modified",
+            "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "items": [], "warnings": [], "safety": ["미리보기 확인 후 실행", "원본·대상 재검증", "덮어쓰기 방지", "보호 사본과 작업 기록"]}
+    reserved: set[str] = set()
+    seen: set[str] = set()
+    _progress(progress_detail, "preview", 0, len(routes), "자동 분류 미리보기 검증")
+    for index, route in enumerate(routes, 1):
+        source = _source(route["source"], directory)
+        key = str(source).casefold()
+        if key in seen:
+            raise OperationError("동일한 파일을 여러 규칙의 대상으로 지정할 수 없습니다.")
+        seen.add(key)
+        action = route.get("action", "copy")
+        if action not in {"copy", "move"}:
+            raise OperationError("분류 작업은 복사 또는 이동이어야 합니다.")
+        if action == "move" and any(parent.name.casefold().endswith(".app") for parent in source.parents):
+            raise OperationError("앱 번들의 내부 파일은 개별 이동하지 않습니다.")
+        relative = str(route["relative_target"]).replace("\\", "/")
+        parts = relative.split("/")
+        if not relative or relative.startswith("/") or any(part in {"", ".", ".."} or re.search(r'[<>:"|?*\x00-\x1f]', part) or part.casefold() == STATE_DIRECTORY.casefold() or part.endswith((" ", ".")) for part in parts):
+            raise OperationError("분류 대상은 안전한 상대 경로여야 합니다.")
+        if any(re.fullmatch(r"(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?", part, re.I) for part in parts):
+            raise OperationError("Windows 예약 장치 이름은 분류 경로에 사용할 수 없습니다.")
+        target = target_root.joinpath(*parts)
+        if source == target:
+            plan["warnings"].append(f"원본과 대상이 같아 건너뜀: {source.relative_to(directory)}")
+            continue
+        target = _unique(target, reserved)
+        fingerprint = _fingerprint(source)
+        plan["items"].append({"source": str(source), "target": str(target), "action": action,
+                              "rule": str(route.get("rule", "사용자 규칙"))[:200], **fingerprint})
+        _progress(progress_detail, "preview", index, len(routes), f"분류 검증: {source.relative_to(directory)}")
+    if plan["items"]:
+        _capacity(plan["items"])
+    plan["signature"] = _sign(plan, _PLAN_KEY)
+    return plan
+
+
+def _duplicate_guard(item: dict, root: Path) -> None:
+    guard = item.get("duplicate_keeper")
+    if not guard:
+        return
+    keeper = _source(guard["path"], root)
+    source = _source(item["source"], root)
+    if keeper == source:
+        raise OperationError("중복 사본과 보존 원본은 다른 파일이어야 합니다.")
+    _verify(keeper, guard)
+    _verify(source, item)
+    with keeper.open("rb") as left, source.open("rb") as right:
+        while True:
+            a, b = left.read(_CHUNK), right.read(_CHUNK)
+            if a != b:
+                raise OperationError("보존 원본과 사본의 실제 내용이 달라 중복 정리를 중단했습니다.")
+            if not a:
+                break
+    _verify(keeper, guard)
+    _verify(source, item)
+
+
+def _duplicate_preflight(items: list[dict], root: Path) -> None:
+    selected = {str(_absolute(item["source"])).casefold() for item in items}
+    targets = {str(_absolute(item["target"])).casefold() for item in items}
+    physical = {(item["device"], item["inode"]) for item in items if item["inode"]}
+    for item in items:
+        guard = item.get("duplicate_keeper")
+        if guard:
+            if (str(_absolute(guard["path"])).casefold() in selected | targets
+                    or (guard["inode"] and (guard["device"], guard["inode"]) in physical)):
+                raise OperationError("보존 원본 또는 그 하드링크가 다른 정리 대상에 포함되어 있습니다.")
+            _duplicate_guard(item, root)
 
 
 def _mkdir(path: Path) -> None:
@@ -525,7 +648,7 @@ def _retain_verified(path: Path, expected: dict, root: Path, operation_id: str,
     return holding
 
 
-def execute_plan(plan: dict) -> dict:
+def execute_plan(plan: dict, *, progress_detail: Callable[[dict], None] | None = None) -> dict:
     """Execute an unchanged preview. Individual failures never discard originals."""
     _check_signature(plan, _PLAN_KEY)
     directory = _root(plan["root"])
@@ -533,6 +656,12 @@ def execute_plan(plan: dict) -> dict:
         raise OperationError("유효하지 않은 작업 ID입니다.")
     if not plan["items"]:
         raise OperationError("실행할 파일이 없습니다. 미리보기의 안내를 확인하세요.")
+    if plan.get("mode") in {"rules", "duplicate_auto"}:
+        _capacity(plan["items"])
+    # Reject the entire automatic duplicate preview before any journal or copy
+    # when any designated keeper has changed or could itself be moved.
+    _duplicate_preflight(plan["items"], directory)
+    _progress(progress_detail, "execute", 0, len(plan["items"]), "검증된 작업 시작")
     state = _state(directory)
     with _lock(state):
         key = _key(state)
@@ -546,11 +675,12 @@ def execute_plan(plan: dict) -> dict:
             journal["items"].append({**item, "state": "pending", "error": None,
                                      "target_created": False})
         _write_journal(journal_path, journal, key, initial=True)
-        for item in journal["items"]:
+        for index, item in enumerate(journal["items"], 1):
             source, target = Path(item["source"]), Path(item["target"])
             try:
                 _source(source, directory)
                 _verify(source, item)
+                _duplicate_guard(item, directory)
                 _safe_path(target)
                 item["state"] = "copying"
                 _write_journal(journal_path, journal, key)
@@ -572,6 +702,7 @@ def execute_plan(plan: dict) -> dict:
                     _source(source, directory)
                     _verify(source, item)
                     _verify(target, item, identity=False)
+                    _duplicate_guard(item, directory)
                     _retain_verified(source, item, directory, journal["id"], item,
                                      "original_backup", lambda: _write_journal(journal_path, journal, key))
                     # A destination edited during the retire step is never the
@@ -586,6 +717,7 @@ def execute_plan(plan: dict) -> dict:
                     item["state"] = "failed"
                     item["target_created"] = False
             _write_journal(journal_path, journal, key)
+            _progress(progress_detail, "execute", index, len(journal["items"]), f"작업 처리: {source.name}")
         successes = sum(item["state"] == "completed" for item in journal["items"])
         journal["status"] = "completed" if successes == len(journal["items"]) else "partial" if successes else "failed"
         _write_journal(journal_path, journal, key)
@@ -605,7 +737,7 @@ def _read_journal(path: Path, root: Path, key: bytes) -> dict:
     return journal
 
 
-def list_history(root: str | Path) -> list[dict]:
+def list_history(root: str | Path, *, progress_detail: Callable[[dict], None] | None = None) -> list[dict]:
     """List valid durable journals, raising on tampered records instead of trusting them."""
     directory = _root(root)
     state = directory / STATE_DIRECTORY
@@ -615,11 +747,17 @@ def list_history(root: str | Path) -> list[dict]:
     if not history.exists():
         return []
     key = _key(state)
-    result = [_read_journal(path, directory, key) for path in history.glob("*.json")]
+    paths = list(history.glob("*.json"))
+    result = []
+    _progress(progress_detail, "history", 0, len(paths), "작업 기록 확인")
+    for index, path in enumerate(paths, 1):
+        result.append(_read_journal(path, directory, key))
+        _progress(progress_detail, "history", index, len(paths), "작업 기록 확인")
     return sorted(result, key=lambda item: item["created_at"], reverse=True)
 
 
-def undo_operation(root: str | Path, operation_id: str) -> dict:
+def undo_operation(root: str | Path, operation_id: str, *,
+                   progress_detail: Callable[[dict], None] | None = None) -> dict:
     """Restore moved files or remove unchanged copies; conflicts remain recoverable."""
     directory = _root(root)
     if not re.fullmatch(r"[0-9a-f]{32}", operation_id):
@@ -630,7 +768,10 @@ def undo_operation(root: str | Path, operation_id: str) -> dict:
         key = _key(state)
         journal_path = state / "history" / f"{operation_id}.json"
         journal = _read_journal(journal_path, directory, key)
-        for item in reversed(journal["items"]):
+        total = len(journal["items"])
+        _progress(progress_detail, "undo", 0, total, "복원 작업 시작")
+        for index, item in enumerate(reversed(journal["items"]), 1):
+            _progress(progress_detail, "undo", index - 1, total, f"복원 확인: {Path(item['source']).name}")
             if item["state"] in {"restored", "unchanged"}:
                 continue
             if not item.get("target_created"):
@@ -681,4 +822,5 @@ def undo_operation(root: str | Path, operation_id: str) -> dict:
             _write_journal(journal_path, journal, key)
         journal["status"] = "undone" if all(item["state"] in {"restored", "unchanged"} for item in journal["items"]) else "partial_undo"
         _write_journal(journal_path, journal, key)
+        _progress(progress_detail, "undo", total, total, "복원 처리 완료")
         return journal
