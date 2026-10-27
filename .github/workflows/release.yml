@@ -17,7 +17,10 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: python -m pip install -e ".[dev,bundle]"
-      - run: python -m pytest -q
+      - run: python -m pytest -q --junitxml=test-results.xml
+      - name: Report test failures
+        if: failure()
+        run: python scripts/report_test_failures.py
       - name: Build portable desktop app
         run: python -m PyInstaller --noconfirm --clean --onedir --windowed --name FolderOrganizer --collect-data PySide6 --copy-metadata PySide6-Essentials --copy-metadata shiboken6 --copy-metadata Pillow --copy-metadata pypdf desktop_entry.py
       - name: Build independent update helper
