@@ -196,10 +196,12 @@ def test_busy_compact_window_keeps_progress_and_actions_inside(app, window, tmp_
         window._on_progress_detail({"phase": "scan", "completed": 17000, "total": None, "unit": "files"})
         app.processEvents()
         assert window.minimumSizeHint().height() <= window.height()
-        for control in (window.keep_first_delete_button, window.progress_bar, window.progress_time_label, window.classify_button, window.preview_button):
+        for control in (window.keep_first_delete_button, window.progress_bar, window.progress_time_label, window.menuBar()):
             origin = control.mapTo(window, control.rect().topLeft())
             assert 0 <= origin.x() and origin.x() + control.width() <= window.width()
             assert 0 <= origin.y() and origin.y() + control.height() <= window.height()
+        assert window.classify_button in window.organize_menu.actions()
+        assert not window.classify_button.isEnabled()
     finally:
         release.set()
         wait(app, window)

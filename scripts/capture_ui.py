@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import tempfile
+import time
 from unittest.mock import patch
 
 from PIL import Image
@@ -16,6 +17,10 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
 from folder_organizer import diagnostics, ui
+from folder_organizer.execution_log import configure_execution_logging, shutdown_execution_logging
+from folder_organizer.execution_log_view import ExecutionLogDialog
+from folder_organizer.merge_view import MergeDialog
+from folder_organizer.merging import execute_merge
 from folder_organizer.help_view import HelpCenterDialog
 from folder_organizer.history_view import HistoryDialog
 from folder_organizer.log_view import LogViewerDialog
@@ -48,6 +53,7 @@ def capture(destination: Path) -> None:
         (root / "사진/여행 사진 copy.png").write_bytes((root / "사진/여행 사진.png").read_bytes())
         preferences = QSettings(str(scratch / "preferences.ini"), QSettings.Format.IniFormat)
         diagnostics.configure_logging(scratch / "logs")
+        configure_execution_logging(scratch / "logs")
 
         def shot(widget, filename):
             widget.show()
@@ -67,8 +73,16 @@ def capture(destination: Path) -> None:
             window.folder_input.setText("예시 폴더 / Downloads")
             diagnostics.log_event("task.completed", "예시 파일 분석 완료", operation_id="example-scan", details={"files": len(scan.files)})
             shot(window, "screenshot.png")
+            window.set_theme("light")
+            shot(window, "screenshot-light.png")
+            window.set_theme("dark")
             window._load_groups(find_duplicates(scan.files), "duplicate")
             shot(window, "comparison.png")
+            window.set_theme("light")
+            shot(window, "comparison-light.png")
+            window.set_theme("dark")
+            shot(window.organize_menu, "menu.png")
+            window.organize_menu.close()
             help_window = HelpCenterDialog(window, topic="duplicates")
             help_window.resize(1040, 660)
             shot(help_window, "help.png")
@@ -87,10 +101,32 @@ def capture(destination: Path) -> None:
             log_window.resize(1000, 650)
             shot(log_window, "logs.png")
             log_window.close()
+            # Real preview and real merge in disposable files; no personal files.
+            first = root / "보고서/업무 보고서.md"
+            second = root / "보고서/업무 보고서 수정.md"
+            first.write_text("# 10월 업무 보고\n\n공통: 제품 검토를 완료했습니다.\n\n첫 문서: 사용자 피드백을 수집했습니다.\n", encoding="utf-8")
+            second.write_text("# 10월 업무 보고\n\n공통: 제품 검토를 완료했습니다.\n\n추가 문서: 다음 달 개선 일정을 확정했습니다.\n", encoding="utf-8")
+            merge_window = MergeDialog(root, [str(first), str(second)], window)
+            merge_window.resize(1040, 700)
+            merge_window._preview()
+            deadline = time.monotonic() + 10
+            while merge_window._worker is not None and time.monotonic() < deadline:
+                app.processEvents()
+                time.sleep(.005)
+            if merge_window._worker is not None or merge_window.plan is None:
+                raise RuntimeError("Merge preview did not finish")
+            shot(merge_window, "merge.png")
+            execute_merge(merge_window.plan)
+            merge_window.close()
+            execution_window = ExecutionLogDialog(window)
+            execution_window.resize(1040, 680)
+            shot(execution_window, "execution-logs.png")
+            execution_window.close()
             window.close()
             app.processEvents()
         diagnostics.shutdown_logging()
-    print(f"Saved seven actual Qt application captures to {destination}")
+        shutdown_execution_logging()
+    print(f"Saved twelve actual Qt application captures to {destination}")
 
 
 if __name__ == "__main__":

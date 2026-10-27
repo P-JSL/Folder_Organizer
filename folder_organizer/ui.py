@@ -17,13 +17,13 @@ from PySide6.QtCore import (
     QAbstractTableModel, QModelIndex, QObject, QSortFilterProxyModel, Qt,
     QThread, QUrl, QSettings, QSize, QTimer, Signal, Slot,
 )
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QImage, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QFont, QImage, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
     QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
     QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSplitter, QTableView, QTabWidget,
-    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from . import __version__
@@ -43,50 +43,14 @@ from .progress import ProgressTracker
 from .rules import default_rules, validate_rules, build_classification_plan, build_duplicate_plan
 from .rule_view import ClassificationDialog
 from .help_view import HelpCenterDialog
+from .themes import apply_theme, stylesheet
+from .execution_log import configure_execution_logging, record_execution
+from .execution_log_view import ExecutionLogDialog
+from .merging import execute_merge
+from .merge_view import MergeDialog
 
 
-STYLE = """
-QWidget { background: #101820; color: #e6edf3; font-size: 13px; }
-QMainWindow { background: #101820; }
-QFrame#sidebar { background: #0b1118; border-right: 1px solid #26323e; }
-QFrame#card { background: #17232e; border: 1px solid #2a3947; border-radius: 12px; }
-QLabel { background: transparent; }
-QLabel#brand { color: #7de4ca; font-size: 22px; font-weight: 700; }
-QLabel#title { font-size: 23px; font-weight: 700; }
-QLabel#subtitle, QLabel#muted { color: #96a9bb; }
-QLabel#cardValue { color: #edf7fa; font-size: 22px; font-weight: 700; }
-QLabel#warning { color: #f4cd82; padding: 8px; background: #2c251a; border-radius: 6px; }
-QLabel#section { font-size: 15px; font-weight: 600; }
-QPushButton { padding: 9px 13px; border: 1px solid #344758; border-radius: 7px; background: #1d2b38; }
-QPushButton:hover { background: #293f50; border-color: #6bcdb8; }
-QPushButton:pressed { background: #364e5d; }
-QPushButton:disabled { color: #667a8d; background: #16212b; border-color: #24323f; }
-QPushButton#primary { background: #75dfc2; color: #0c2823; font-weight: 700; border-color: #75dfc2; }
-QPushButton#primary:hover { background: #9cf1da; }
-QPushButton#primary:disabled { background: #294b45; color: #77968e; border-color: #294b45; }
-QPushButton#caution { border-color: #a78449; color: #f2d293; }
-QPushButton#nav { text-align: left; border: 0; background: transparent; padding: 9px; }
-QPushButton#nav:hover { background: #1c2b36; }
-QLineEdit, QComboBox, QDoubleSpinBox { border: 1px solid #354757; border-radius: 7px; padding: 8px; background: #14212c; }
-QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus { border-color: #75dfc2; }
-QComboBox::drop-down { border: 0; width: 24px; }
-QCheckBox { spacing: 7px; background: transparent; }
-QCheckBox::indicator { width: 16px; height: 16px; }
-QTableView, QTreeWidget, QPlainTextEdit { background: #14202a; alternate-background-color: #172630; border: 1px solid #2d3c49; border-radius: 8px; selection-background-color: #2b5661; selection-color: #ffffff; }
-QTableView::item, QTreeWidget::item { padding: 7px; border: 0; }
-QTableView::item:selected, QTreeWidget::item:selected { background: #2b5661; }
-QHeaderView::section { padding: 10px 7px; background: #1d2c38; color: #aec1cf; border: 0; border-bottom: 1px solid #344857; }
-QTabWidget::pane { border: 0; }
-QTabBar::tab { background: #14212c; color: #93a9b9; padding: 7px 15px; border-bottom: 2px solid #263742; }
-QTabBar::tab:selected { color: #7de4ca; border-bottom-color: #7de4ca; }
-QProgressBar { border: 0; border-radius: 4px; background: #253644; min-height: 17px; max-height: 17px; text-align: center; font-size: 11px; }
-QProgressBar::chunk { background: #75dfc2; border-radius: 3px; }
-QToolTip { background: #24394a; color: #ffffff; border: 1px solid #6e9da4; padding: 5px; }
-QScrollBar:vertical { background: #13202a; width: 11px; }
-QScrollBar::handle:vertical { background: #3b5262; min-height: 25px; border-radius: 5px; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QMenu { background: #182a37; border: 1px solid #354b5b; }
-"""
+STYLE = stylesheet('dark')
 
 
 def format_size(size: int) -> str:
@@ -329,13 +293,16 @@ class AnalysisSettingsDialog(QDialog):
 _DETAIL_LABELS = {
     "id": "작업 번호", "root": "선택 폴더", "mode": "작업 방식", "created_at": "작업 시각",
     "status": "상태", "state": "처리 상태", "items": "파일별 결과", "results": "결과",
-    "source": "원본", "target": "대상", "path": "파일", "output": "복구본", "action": "작업",
+    "source": "원본", "target": "대상", "path": "파일", "output": "생성한 파일", "action": "작업",
     "error": "오류", "errors": "오류 목록", "warnings": "주의 사항", "details": "상세 내용",
     "format": "형식", "size": "파일 크기", "recovered_entries": "복구한 항목 수",
     "journal_path": "작업 기록 위치", "undo_status": "복원 상태", "undone_at": "복원 시각",
     "skipped": "건너뛴 항목", "complete": "완료", "partial": "부분 완료", "failed": "실패",
     "classification_summary": "분류 요약", "matched": "규칙 일치", "rules": "규칙 수", "rule": "적용 규칙",
     "retention_rule": "보존 규칙", "kept": "보존 파일", "selected": "처리할 사본",
+    "output_created": "새 파일 생성", "output_verified": "새 파일 검증",
+    "source_count": "병합한 원본 수", "removed_units": "겹친 문단·행 수",
+    "archive_journal": "원본 안전 보관 기록", "move_originals": "병합 후 원본 이동",
 }
 _DETAIL_VALUES = {
     "healthy": "정상", "damaged": "손상 감지", "unsupported": "지원하지 않는 형식 또는 크기",
@@ -613,6 +580,9 @@ class MainWindow(QMainWindow):
         self._history_dialog = None
         self._log_dialog = None
         self._help_dialog = None
+        self._execution_log_dialog = None
+        self._merge_dialog = None
+        self._merge_execute_pending = False
         self._guidance_action = "folder"
         self._is_busy = False
         self.settings = QSettings("P-JSL", "FolderOrganizer")
@@ -624,7 +594,7 @@ class MainWindow(QMainWindow):
         self.progress_timer = QTimer(self)
         self.progress_timer.setInterval(500)
         self.progress_timer.timeout.connect(self._refresh_progress_time)
-        self.setStyleSheet(STYLE)
+        self.set_theme(self.settings.value("appearance/theme", "dark"), persist=False)
         self.set_busy(False)
         self.update_timer = QTimer(self)
         self.update_timer.setInterval(6 * 60 * 60 * 1000)
@@ -649,62 +619,128 @@ class MainWindow(QMainWindow):
             self._work_controls.append(button)
         return button
 
+    def _menu_action(self, menu, text, callback, *, shortcut=None, work=True):
+        action = menu.addAction(text)
+        action.triggered.connect(lambda _checked=False: callback())
+        if shortcut:
+            action.setShortcut(shortcut)
+        if work:
+            self._work_controls.append(action)
+        return action
+
+    def _build_header_menus(self):
+        bar = self.menuBar()
+        bar.setNativeMenuBar(False)
+        self.file_menu = bar.addMenu("파일")
+        self._menu_action(self.file_menu, "폴더 선택…", self.choose_folder, shortcut="Ctrl+O")
+        self.scan_button = self._menu_action(self.file_menu, "다시 분석", self.start_scan, shortcut="F5")
+        self.file_menu.addSeparator()
+        self._menu_action(self.file_menu, "표시된 파일 모두 체크", self.select_visible, shortcut="Ctrl+A")
+        self._menu_action(self.file_menu, "전체 체크 해제", self.clear_selection, shortcut="Ctrl+Shift+A")
+        self._menu_action(self.file_menu, "파일 위치 열기", self.reveal_selected)
+        self.export_menu = self.file_menu.addMenu("내보내기")
+        self._menu_action(self.export_menu, "표시된 파일 목록 · CSV", self.export_csv)
+        self._menu_action(self.export_menu, "분석 보고서 · HTML / JSON", self.export_match_report)
+        self.file_menu.addSeparator()
+        self._menu_action(self.file_menu, "종료", self.close, work=False)
+
+        self.analysis_menu = bar.addMenu("검사")
+        self.duplicates_button = self._menu_action(self.analysis_menu, "중복 검사 · 완전히 같은 내용", self.analyze_duplicates, shortcut="Ctrl+D")
+        self.similar_button = self._menu_action(self.analysis_menu, "유사 비교 · 비슷한 이름과 내용", self.analyze_similar, shortcut="Ctrl+Shift+D")
+        self.analysis_menu.addSeparator()
+        self._menu_action(self.analysis_menu, "검사 범위 · 보존 설정…", self.show_analysis_settings)
+
+        self.organize_menu = bar.addMenu("정리")
+        self.classify_button = self._menu_action(self.organize_menu, "규칙으로 자동 분류…", self.show_classification, shortcut="Ctrl+R")
+        self.duplicate_classification_action = self._menu_action(self.organize_menu, "검증된 중복 자동 분류…", self.classify_duplicates)
+        self.keep_first_delete_action = self._menu_action(self.organize_menu, "첫 번째만 남기고 나머지 삭제…", self.keep_first_delete)
+        self.organize_menu.addSeparator()
+        self.merge_action = self._menu_action(self.organize_menu, "체크한 파일 내용 병합…", self.show_merge, shortcut="Ctrl+M")
+        self.merge_action.setToolTip("텍스트·Markdown·CSV·TSV에서 겹치는 내용을 합쳐 새 파일로 만듭니다. 원본 이동은 선택 사항입니다.")
+        manual_menu = self.organize_menu.addMenu("체크한 파일 수동 정리")
+        for label, mode, basis in (("안전 보관…", "quarantine", "modified"),
+                                   ("선택 폴더에 복사…", "copy", "modified"),
+                                   ("선택 폴더로 이동…", "move", "modified"),
+                                   ("수정일별 폴더로 정리…", "date", "modified"),
+                                   ("생성일별 폴더로 정리…", "date", "created"),
+                                   ("확장자별 폴더로 정리…", "extension", "modified")):
+            self._menu_action(manual_menu, label, lambda mode=mode, basis=basis: self._manual_action(mode, basis))
+        self.organize_menu.addSeparator()
+        self.assume_duplicates_button = self._menu_action(self.organize_menu, "선택 항목을 중복으로 간주…", self.assume_duplicates)
+        self.assume_duplicates_button.setToolTip("중복 검증 없이 사용자가 직접 지정한 파일을 안전 보관합니다. 남길 원본을 직접 확인하세요.")
+
+        self.records_menu = bar.addMenu("기록")
+        self._menu_action(self.records_menu, "실행 로그…", self.show_execution_logs, work=False)
+        self._menu_action(self.records_menu, "작업 기록 · 복원…", self.show_history)
+        self.records_menu.addSeparator()
+        self._menu_action(self.records_menu, "활동 · 진단 로그…", self.show_logs, work=False)
+
+        self.view_menu = bar.addMenu("보기")
+        theme_group = QActionGroup(self)
+        theme_group.setExclusive(True)
+        self.theme_actions = {}
+        for mode, label in (("dark", "다크 모드 (기본)"), ("light", "라이트 모드")):
+            action = self.view_menu.addAction(label)
+            action.setCheckable(True)
+            theme_group.addAction(action)
+            action.triggered.connect(lambda _checked=False, mode=mode: self.set_theme(mode))
+            self.theme_actions[mode] = action
+
+        self.tools_menu = bar.addMenu("도구")
+        self._menu_action(self.tools_menu, "선택 파일 손상 검사", self.inspect_selected)
+        self._menu_action(self.tools_menu, "원본을 보존하고 복구본 만들기", self.repair_selected)
+        self.tools_menu.addSeparator()
+        self.update_button = self._menu_action(self.tools_menu, "업데이트 확인", self.manual_update_check, work=False)
+        self.auto_update_check = self.tools_menu.addAction("자동 업데이트")
+        self.auto_update_check.setCheckable(True)
+        self.auto_update_check.setChecked(self.settings.value("updates/enabled", True, type=bool))
+        self.auto_update_check.setToolTip("Windows 배포 버전에서 새 릴리스를 준비하고 앱 종료 후 적용합니다.")
+        self.auto_update_check.toggled.connect(self._auto_update_changed)
+        self.update_status = QLabel("종료 후 새 버전 적용" if updater.is_auto_update_supported() else "내 PC에서 처리 · 소스 실행")
+        self.update_status.setObjectName("muted")
+        self.update_status.setToolTip("파일은 서버에 업로드하지 않습니다. 자동 업데이트는 Windows 배포 버전에서 사용할 수 있습니다.")
+
+        help_menu = bar.addMenu("도움말")
+        self._menu_action(help_menu, "기능 안내…", self.show_help, shortcut="F1", work=False)
+        self._menu_action(help_menu, "중복과 유사의 차이", self.show_comparison_guide, work=False)
+        self.header_corner = QWidget(bar)
+        corner = self.header_corner
+        corner_layout = QHBoxLayout(corner)
+        corner_layout.setContentsMargins(12, 0, 16, 0)
+        brand = QLabel(f"FOLDER ORGANIZER   ·   v{__version__}")
+        brand.setObjectName("brand")
+        corner_layout.addWidget(brand)
+        self.help_button = QToolButton()
+        self.help_button.setText("?")
+        self.help_button.setToolTip("기능 안내 (F1)")
+        self.help_button.clicked.connect(self.show_help)
+        corner_layout.addWidget(self.help_button)
+        bar.setCornerWidget(corner)
+
+    def set_theme(self, mode, *, persist=True):
+        self.theme_mode = apply_theme(self, mode)
+        if persist:
+            self.settings.setValue("appearance/theme", self.theme_mode)
+        for key, action in self.theme_actions.items():
+            action.setChecked(key == self.theme_mode)
+
+    def _manual_action(self, mode, basis):
+        index = next((index for index in range(self.action_combo.count())
+                      if self.action_combo.itemData(index) == (mode, basis)), 0)
+        self.action_combo.setCurrentIndex(index)
+        self.preview_selected()
+
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
         shell = QHBoxLayout(central)
         shell.setContentsMargins(0, 0, 0, 0)
         shell.setSpacing(0)
-        sidebar = QFrame()
-        sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(195)
-        nav = QVBoxLayout(sidebar)
-        nav.setContentsMargins(16, 20, 16, 16)
-        brand = QLabel("FOLDER\nORGANIZER")
-        brand.setObjectName("brand")
-        nav.addWidget(brand)
-        local = QLabel("로컬 파일 정리 도구")
-        local.setObjectName("muted")
-        nav.addWidget(local)
-        nav.addSpacing(14)
-        for text, callback in (("▦  폴더 선택", self.choose_folder), ("◎  중복 파일 찾기", self.analyze_duplicates),
-                               ("≈  유사 파일 찾기", self.analyze_similar), ("▤  규칙으로 자동 분류", self.show_classification),
-                               ("↶  작업 기록 · 복원", self.show_history), ("≡  활동 로그", self.show_logs),
-                               ("⚙  설정 · 도움말", self.show_analysis_settings), ("↑  업데이트 확인", self.manual_update_check)):
-            button = self._button(text, callback, work=text not in {"≡  활동 로그", "↑  업데이트 확인"})
-            button.setObjectName("nav")
-            if text == "↑  업데이트 확인":
-                self.update_button = button
-            if text == "⚙  설정 · 도움말":
-                menu = QMenu(button)
-                menu.addAction("검사 범위 · 보존 설정", self.show_analysis_settings)
-                menu.addAction("중복과 유사의 차이", self.show_comparison_guide)
-                menu.addAction("사용 안내", self.show_help)
-                button.setMenu(menu)
-            nav.addWidget(button)
-        nav.addStretch()
-        privacy = QLabel("내 PC에서 처리\n파일을 서버에 업로드하지\n않습니다.")
-        privacy.setWordWrap(True)
-        privacy.setObjectName("muted")
-        nav.addWidget(privacy)
-        nav.addSpacing(14)
-        self.auto_update_check = QCheckBox("자동 업데이트")
-        self.auto_update_check.setChecked(self.settings.value("updates/enabled", True, type=bool))
-        self.auto_update_check.setToolTip("Windows 배포 버전에서 새 릴리스를 자동으로 준비하고 앱 종료 후 적용합니다.")
-        self.auto_update_check.toggled.connect(self._auto_update_changed)
-        nav.addWidget(self.auto_update_check)
-        self.update_status = QLabel("종료 후 새 버전 적용" if updater.is_auto_update_supported() else "소스 실행 · 자동 적용 제외")
-        self.update_status.setObjectName("muted")
-        self.update_status.setWordWrap(True)
-        nav.addWidget(self.update_status)
-        version = QLabel(f"v{__version__}  ·  안전 보관 기본")
-        version.setObjectName("muted")
-        nav.addWidget(version)
-        shell.addWidget(sidebar)
+        self._build_header_menus()
 
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(24, 18, 24, 14)
+        layout.setContentsMargins(28, 22, 28, 14)
         layout.setSpacing(6)
         header = QHBoxLayout()
         titles = QVBoxLayout()
@@ -717,18 +753,12 @@ class MainWindow(QMainWindow):
         subtitle.setWordWrap(True)
         subtitle.setObjectName("subtitle")
         titles.addWidget(subtitle)
-        header.addLayout(titles)
-        header.addStretch()
+        header.addLayout(titles, 1)
         self.next_step_button = self._button("폴더 선택", self._run_next_step, primary=True)
         header.addWidget(self.next_step_button)
         self.folder_button = self._button("폴더 선택", self.choose_folder, primary=True)
-        self.folder_button.setShortcut("Ctrl+O")
         self.folder_button.setToolTip("분석할 개인 폴더 선택 (Ctrl+O)")
         header.addWidget(self.folder_button)
-        self.help_button = self._button("기능 안내 · F1", self.show_help, work=False)
-        self.help_button.setShortcut("F1")
-        self.help_button.setToolTip("기능의 목적·사용 순서·실행 결과를 검색해서 확인합니다 (F1)")
-        header.addWidget(self.help_button)
         layout.addLayout(header)
 
         folder_row = QHBoxLayout()
@@ -736,8 +766,6 @@ class MainWindow(QMainWindow):
         self.folder_input.setReadOnly(True)
         self.folder_input.setPlaceholderText("개인 컴퓨터의 폴더를 선택하세요")
         folder_row.addWidget(self.folder_input, 1)
-        self.scan_button = self._button("다시 분석", self.start_scan)
-        folder_row.addWidget(self.scan_button)
         layout.addLayout(folder_row)
         options = QHBoxLayout()
         self.recursive_check = QCheckBox("하위 폴더 포함")
@@ -780,8 +808,6 @@ class MainWindow(QMainWindow):
             self.type_filter.addItem(label, value)
         self.type_filter.currentIndexChanged.connect(self._filter_changed)
         filters.addWidget(self.type_filter)
-        filters.addWidget(self._button("표시 항목 선택", self.select_visible))
-        filters.addWidget(self._button("선택 해제", self.clear_selection))
         filters.setContentsMargins(0, 0, 0, 0)
         self.filter_panel = QWidget()
         self.filter_panel.setLayout(filters)
@@ -802,7 +828,7 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().setDefaultSectionSize(35)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.horizontalHeader().setStretchLastSection(True)
-        for column, width in enumerate((50, 220, 85, 90, 155, 155, 240)):
+        for column, width in enumerate((50, 220, 110, 90, 155, 155, 240)):
             self.table.setColumnWidth(column, width)
         self.table.sortByColumn(1, Qt.SortOrder.AscendingOrder)
         self.table.doubleClicked.connect(self._reveal_index)
@@ -827,6 +853,10 @@ class MainWindow(QMainWindow):
         self.keep_first_delete_button.setToolTip("완전 중복 그룹에 표시된 첫 파일과 보호 폴더의 파일을 남깁니다. 나머지 사본은 원래 위치에서 안전 보관으로 옮기며, 작업 기록에서 복원할 수 있습니다. 영구 삭제하거나 디스크 공간을 확보하지 않습니다.")
         match_header.addWidget(self.keep_first_delete_button)
         matches_layout.addLayout(match_header)
+        self.keep_first_hint = QLabel("첫 번째 파일은 남기고 나머지 사본을 정리합니다. 다음 화면 확인 → 안전 보관 → 필요하면 복원")
+        self.keep_first_hint.setObjectName("muted")
+        self.keep_first_hint.setWordWrap(True)
+        matches_layout.addWidget(self.keep_first_hint)
         compare_controls = QHBoxLayout()
         self.match_filter = QComboBox()
         for label, key in (("모든 근거", "all"), ("이름만 유사", "name_only"), ("내용 근거 있음", "content"),
@@ -836,6 +866,9 @@ class MainWindow(QMainWindow):
         compare_controls.addWidget(self.match_filter)
         self.compare_button = self._button("두 파일 나란히 비교", self.compare_current_group)
         compare_controls.addWidget(self.compare_button)
+        self.merge_group_button = self._button("선택 후보 내용 병합…", self.merge_current_group)
+        self.merge_group_button.setToolTip("같거나 비슷한 제목이어도 직접 내용을 확인합니다. 지원되는 텍스트·CSV 후보만 병합할 수 있습니다.")
+        compare_controls.addWidget(self.merge_group_button)
         self.retention_rule = QComboBox()
         for key, label in RETENTION_LABELS.items():
             self.retention_rule.addItem(label, key)
@@ -846,7 +879,6 @@ class MainWindow(QMainWindow):
         self.retention_button = self._button("보존 규칙으로 선택", self.select_by_retention)
         compare_controls.addWidget(self.retention_button)
         compare_controls.addStretch()
-        compare_controls.addWidget(self._button("결과 보고서", self.export_match_report))
         matches_layout.addLayout(compare_controls)
         self.match_explanation = QLabel("중복은 내용이 완전히 같은 파일입니다. 유사는 직접 확인할 후보입니다.")
         self.match_explanation.setObjectName("muted")
@@ -880,54 +912,23 @@ class MainWindow(QMainWindow):
         self.views.setTabVisible(1, False)
         layout.addWidget(self.views, 1)
 
-        analysis = QHBoxLayout()
-        self.duplicates_button = self._button("중복 검사 · 같은 내용", self.analyze_duplicates)
-        self.duplicates_button.setToolTip("이름이 달라도 내용이 완전히 같은 복사본을 찾습니다. 검사만으로 파일을 바꾸지 않습니다.")
-        self.similar_button = self._button("유사 비교 · 비슷한 내용", self.analyze_similar)
-        self.similar_button.setToolTip("이름·지원 텍스트·사진이 비슷한 후보를 찾습니다. 직접 비교한 뒤 남길 파일을 결정하세요.")
-        analysis.addWidget(self.duplicates_button)
-        analysis.addWidget(self.similar_button)
         self.similarity_threshold = QDoubleSpinBox(self)
         self.similarity_threshold.setRange(0.50, 1.00)
         self.similarity_threshold.setSingleStep(0.01)
         self.similarity_threshold.setDecimals(2)
         self.similarity_threshold.setValue(self.analysis_options["name_threshold"])
         self.similarity_threshold.valueChanged.connect(self._name_threshold_changed)
-        self.similarity_threshold.setToolTip("유사도 점수는 후보를 찾는 참고 값입니다. 내용이 같은 파일임을 보장하지 않습니다.")
         self.similarity_threshold.hide()
-        analysis.addWidget(self._button("검사 설정", self.show_analysis_settings))
-        self.classify_button = self._button("자동 분류 · 폴더 나누기", self.show_classification)
-        self.classify_button.setToolTip("분석한 전체 파일에서 규칙에 맞는 파일을 분류합니다. 목록 체크와 검색 필터는 적용하지 않습니다. 기본은 원본을 남기는 복사입니다.")
-        classification_menu = QMenu(self.classify_button)
-        classification_menu.addAction("내 규칙으로 폴더·파일 분류", self.show_classification)
-        self.duplicate_classification_action = classification_menu.addAction("검증된 중복 자동 분류", self.classify_duplicates)
-        self.classify_button.setMenu(classification_menu)
-        analysis.addWidget(self.classify_button)
         self._work_controls.append(self.similarity_threshold)
-        analysis.addStretch()
-        self.recovery_menu_button = self._button("검사·복구", lambda: None)
-        recovery_menu = QMenu(self.recovery_menu_button)
-        recovery_menu.addAction("선택 파일 손상 검사", self.inspect_selected)
-        recovery_menu.addAction("원본을 보존하고 복구본 만들기", self.repair_selected)
-        recovery_menu.addSeparator()
-        recovery_menu.addAction("작업 기록 · 실행 취소", self.show_history)
-        self.recovery_menu_button.setMenu(recovery_menu)
-        analysis.addWidget(self.recovery_menu_button)
-        self.export_menu_button = self._button("내보내기", lambda: None)
-        self.export_menu_button.setToolTip("표시된 파일 목록 CSV 또는 범위·판정 근거를 포함한 HTML/JSON 분석 보고서를 새 파일로 저장합니다.")
-        export_menu = QMenu(self.export_menu_button)
-        export_menu.addAction("표시된 파일 목록 · CSV", self.export_csv)
-        export_menu.addAction("분석 보고서 · HTML / JSON", self.export_match_report)
-        self.export_menu_button.setMenu(export_menu)
-        analysis.addWidget(self.export_menu_button)
-        analysis.addWidget(self._button("위치 열기", self.reveal_selected))
-        layout.addLayout(analysis)
 
         actions = QHBoxLayout()
+        self.selection_panel = QWidget()
+        selected_layout = QVBoxLayout(self.selection_panel)
+        selected_layout.setContentsMargins(0, 0, 0, 0)
         self.selection_hint = QLabel()
         self.selection_hint.setObjectName("muted")
         self.selection_hint.setWordWrap(True)
-        layout.addWidget(self.selection_hint)
+        selected_layout.addWidget(self.selection_hint)
         self.action_combo = QComboBox()
         for label, mode, basis in (("안전 보관 (실행 취소 가능)", "quarantine", "modified"),
                                    ("선택 폴더에 복사", "copy", "modified"),
@@ -941,10 +942,8 @@ class MainWindow(QMainWindow):
         self._work_controls.append(self.action_combo)
         self.preview_button = self._button("작업 미리보기", self.preview_selected, primary=True)
         actions.addWidget(self.preview_button)
-        self.assume_duplicates_button = self._button("선택 항목을 중복으로 간주", self.assume_duplicates, caution=True)
-        self.assume_duplicates_button.setToolTip("해시 검증 없이 사용자가 직접 지정한 파일을 안전 보관합니다. 원본 하나를 남길지 직접 확인하세요.")
-        actions.addWidget(self.assume_duplicates_button)
-        layout.addLayout(actions)
+        selected_layout.addLayout(actions)
+        layout.addWidget(self.selection_panel)
 
         self.visible_label = QLabel("분석 대기 중")
         self.visible_label.setObjectName("muted")
@@ -971,6 +970,7 @@ class MainWindow(QMainWindow):
         self.cancel_button = self._button("분석 중단", self.cancel_task, work=False)
         self.cancel_button.hide()
         footer.addWidget(self.cancel_button)
+        footer.addWidget(self.update_status)
         layout.addLayout(footer)
         shell.addWidget(content, 1)
         self._work_controls.append(self.table)
@@ -1004,6 +1004,7 @@ class MainWindow(QMainWindow):
         if hidden:
             selection += f" · 목록 필터로 숨겨진 {hidden:,}개 포함"
         self.selection_hint.setText(selection + "  |  " + effects[mode])
+        self.selection_panel.setVisible(bool(count))
         self.preview_button.setText(f"체크한 {count:,}개 미리보기" if count else "작업 미리보기")
         self.preview_button.setToolTip("현재 목록에서 보이지 않는 체크 항목도 포함됩니다. 다음 화면에서 전체 원본·대상 경로를 확인하세요.")
         self._refresh_guidance()
@@ -1049,6 +1050,9 @@ class MainWindow(QMainWindow):
         ready = self.scan_complete and bool(self.model.entries) and not self._is_busy
         for control in (self.duplicates_button, self.similar_button, self.classify_button):
             control.setEnabled(ready)
+        self.merge_action.setEnabled(ready and len(self.model.checked) >= 2)
+        self.keep_first_delete_action.setEnabled(ready and self.match_kind == "duplicate" and bool(self.groups))
+        self.merge_group_button.setEnabled(ready and bool(self.groups))
         for control in (self.preview_button, self.assume_duplicates_button):
             control.setEnabled(ready and bool(self.model.checked))
 
@@ -1249,11 +1253,21 @@ class MainWindow(QMainWindow):
             self.status_label.setText("진행 중인 파일 처리가 끝나면 분석을 중단합니다…")
 
     def closeEvent(self, event):
-        file_busy = self._worker is not None and self._worker.isRunning()
+        file_busy = self._merge_execute_pending or (self._worker is not None and self._worker.isRunning())
         update_busy = self._update_worker is not None and self._update_worker.isRunning()
+        merge_preview = self._merge_dialog._worker if self._merge_dialog is not None else None
+        if merge_preview is not None:
+            self._close_requested = True
+            self._merge_dialog.setEnabled(False)
+            if not getattr(self, "_merge_close_waiting", False):
+                self._merge_close_waiting = True
+                merge_preview.finished.connect(self.close, Qt.ConnectionType.QueuedConnection)
+            self.status_label.setText("병합 미리보기를 안전하게 마친 뒤 종료합니다. 원본 파일은 변경하지 않습니다.")
+            event.ignore()
+            return
         if file_busy or update_busy:
             self._close_requested = True
-            if file_busy and self._cancellable:
+            if self._worker is not None and self._cancellable:
                 self._worker.cancel_event.set()
             if update_busy:
                 self._update_worker.cancel_event.set()
@@ -1276,7 +1290,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             self._pending_update = None
-        for dialog in (self._help_dialog, self._history_dialog, self._log_dialog):
+        for dialog in (self._help_dialog, self._history_dialog, self._log_dialog, self._execution_log_dialog, self._merge_dialog):
             if dialog is not None:
                 dialog.close()
         event.accept()
@@ -1690,6 +1704,7 @@ class MainWindow(QMainWindow):
         self.retention_rule.setVisible(exact)
         self.retention_button.setVisible(exact)
         self.keep_first_delete_button.setVisible(exact)
+        self.keep_first_hint.setVisible(exact)
         self._refresh_guidance()
 
     def _render_match_tree(self, *_args):
@@ -2209,12 +2224,24 @@ class MainWindow(QMainWindow):
             return
         def task(worker):
             results = []
+            execution_id = uuid.uuid4().hex
+            record_execution("execution.started", execution_id=execution_id, action="repair", status="started",
+                             message="원본을 보존하고 복구본 만들기", target=destination, completed=0, total=len(paths))
             for path in paths:
                 worker.report(f"복구본 생성: {Path(path).name}")
                 try:
-                    results.append({"path": path, **repair_file(path, destination)})
+                    result = {"path": path, **repair_file(path, destination)}
                 except Exception as exc:
-                    results.append({"path": path, "status": "failed", "details": str(exc)})
+                    result = {"path": path, "status": "failed", "details": str(exc)}
+                results.append(result)
+                record_execution("execution.item", execution_id=execution_id, action="repair", status=str(result.get("status", "failed")),
+                                 message="복구본 생성 결과", source=path, target=result.get("output"),
+                                 error="; ".join(map(str, result.get("details", []))) if result.get("status") in {"failed", "error", "unsupported", "partial"} else None,
+                                 completed=len(results), total=len(paths))
+            statuses = {result.get("status") for result in results}
+            status = "completed" if statuses <= {"repaired", "healthy"} else "partial" if statuses.intersection({"repaired", "partial"}) else "failed"
+            record_execution("execution.finished", execution_id=execution_id, action="repair", status=status,
+                             message="복구본 생성 작업 완료", target=destination, completed=len(results), total=len(paths))
             return {"저장 폴더": destination, "results": results}
         self._start_task("원본을 보존하며 복구 가능한 내용을 새 파일에 저장하고 있습니다…", task,
                          self._repair_done)
@@ -2286,6 +2313,74 @@ class MainWindow(QMainWindow):
         dialog.finished.connect(closed)
         dialog.open()
 
+    def show_execution_logs(self):
+        if self._execution_log_dialog is not None and self._execution_log_dialog.isVisible():
+            self._execution_log_dialog.refresh_logs()
+            self._execution_log_dialog.raise_()
+            self._execution_log_dialog.activateWindow()
+            return
+        dialog = ExecutionLogDialog(self)
+        self._execution_log_dialog = dialog
+
+        def closed(_result):
+            if self._execution_log_dialog is dialog:
+                self._execution_log_dialog = None
+            dialog.deleteLater()
+
+        dialog.finished.connect(closed)
+        dialog.open()
+
+    def merge_current_group(self):
+        if not self._require_scan():
+            return
+        item = self.match_tree.currentItem()
+        index = item.data(0, Qt.ItemDataRole.UserRole + 1) if item else None
+        if index is None:
+            if len(self.groups) == 1:
+                index = 0
+            else:
+                QMessageBox.information(self, "병합 후보 선택", "비교 결과에서 병합할 그룹을 선택하세요. 텍스트·CSV 등 지원 형식만 병합할 수 있습니다.")
+                return
+        if isinstance(index, int) and 0 <= index < len(self.groups):
+            self.show_merge(list(self.groups[index].paths))
+
+    def show_merge(self, paths=None):
+        if not self._require_scan():
+            return
+        paths = self.selected_paths() if paths is None else paths
+        if len(paths) < 2:
+            QMessageBox.information(self, "내용 병합", "파일 목록에서 병합할 파일을 두 개 이상 체크하세요. 또는 비교 결과의 그룹을 선택하세요.")
+            return
+        if self._merge_dialog is not None and self._merge_dialog.isVisible():
+            self._merge_dialog.raise_()
+            return
+        dialog = MergeDialog(self.root, paths, self)
+        self._merge_dialog = dialog
+
+        def execute(plan):
+            # Leave the dialog event stack before starting filesystem work.
+            self._merge_execute_pending = True
+            def start():
+                self._merge_execute_pending = False
+                self._start_task("겹치는 내용을 병합하고 새 파일을 검증하고 있습니다…",
+                                 lambda worker: execute_merge(plan, progress_detail=worker.report_detail), self._merge_done)
+            QTimer.singleShot(0, start)
+
+        def closed(_result):
+            if self._merge_dialog is dialog:
+                self._merge_dialog = None
+            dialog.deleteLater()
+
+        dialog.plan_ready.connect(execute)
+        dialog.finished.connect(closed)
+        dialog.open()
+
+    def _merge_done(self, result):
+        self._analysis_cache.clear()
+        self.scan_complete = False
+        self._show_details("내용 병합 결과", result)
+        self.start_scan()
+
     def _show_details(self, title: str, result):
         dialog = QDialog(self)
         dialog.setWindowTitle(title)
@@ -2310,6 +2405,7 @@ class MainWindow(QMainWindow):
 
 def launch() -> int:
     configure_logging()
+    configure_execution_logging()
     install_exception_hook()
     log_event("application.started", f"Folder Organizer {__version__}")
     app = QApplication.instance() or QApplication(sys.argv)

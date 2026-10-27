@@ -272,14 +272,15 @@ def test_compact_window_keeps_comparison_and_all_operation_categories_accessible
     window.show()
     app.processEvents()
     assert window.minimumSizeHint().height() <= window.height()
-    for control in (window.match_tree, window.preview_button, window.assume_duplicates_button,
-                    window.recovery_menu_button, window.export_menu_button):
+    for control in (window.match_tree, window.menuBar(), window.compare_button):
         origin = control.mapTo(window, control.rect().topLeft())
         assert 0 <= origin.y() and origin.y() + control.height() <= window.height()
-    assert {action.text() for action in window.recovery_menu_button.menu().actions()} >= {
-        "선택 파일 손상 검사", "원본을 보존하고 복구본 만들기", "작업 기록 · 실행 취소"}
-    assert {action.text() for action in window.export_menu_button.menu().actions()} == {
+    assert {action.text() for action in window.tools_menu.actions()} >= {
+        "선택 파일 손상 검사", "원본을 보존하고 복구본 만들기"}
+    assert {action.text() for action in window.export_menu.actions()} == {
         "표시된 파일 목록 · CSV", "분석 보고서 · HTML / JSON"}
+    assert window.assume_duplicates_button in window.organize_menu.actions()
+    assert not window.selection_panel.isVisible()
 
 
 def test_image_preview_fits_resized_panel_without_cropping(app):

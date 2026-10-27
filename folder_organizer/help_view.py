@@ -13,19 +13,21 @@ from PySide6.QtWidgets import (
 )
 
 from .help_content import HelpTopic, get_topic, topics_for_query
+from .themes import PALETTES, current_theme, normalize_mode
 
 
-def topic_html(topic: HelpTopic) -> str:
+def topic_html(topic: HelpTopic, mode: str = "dark") -> str:
     """Escape every content field before rendering a bounded local document."""
+    colors = PALETTES[normalize_mode(mode)]
     steps = "".join(f"<li>{escape(step)}</li>" for step in topic.steps)
     return (
         "<html><head><style>"
-        "body { color: #e6edf3; font-family: 'Segoe UI'; font-size: 13px; margin: 14px; }"
-        "h1 { font-size: 24px; color: #8ce6cf; margin-bottom: 10px; }"
-        "h2 { font-size: 16px; color: #d9f4ec; margin-top: 13px; margin-bottom: 5px; }"
+        f"body {{ color: {colors['text']}; background-color: {colors['surface']}; font-family: 'Segoe UI'; font-size: 13px; margin: 14px; }}"
+        f"h1 {{ font-size: 24px; color: {colors['accent']}; margin-bottom: 10px; }}"
+        f"h2 {{ font-size: 16px; color: {colors['text']}; margin-top: 13px; margin-bottom: 5px; }}"
         "p { margin-top: 4px; margin-bottom: 7px; } li { margin-bottom: 7px; }"
-        ".summary { color: #b7c9d6; font-size: 14px; }"
-        ".note { color: #f0d393; }"
+        f".summary {{ color: {colors['muted']}; font-size: 14px; }}"
+        f".note {{ color: {colors['warning']}; }}"
         "</style></head><body>"
         f"<h1>{escape(topic.title)}</h1>"
         f"<p class='summary'>{escape(topic.summary)}</p>"
@@ -43,7 +45,7 @@ class LocalHelpBrowser(QTextBrowser):
         super().__init__(parent)
         self.setOpenExternalLinks(False)
         self.setOpenLinks(False)
-        self.setStyleSheet("QTextBrowser { background: #14202a; color: #e6edf3; border: 1px solid #344758; border-radius: 8px; }")
+        self.setObjectName("helpDocument")
         self.setAccessibleName("선택한 기능의 사용 안내")
 
     def loadResource(self, resource_type, name: QUrl):
@@ -194,12 +196,21 @@ class HelpCenterDialog(QDialog):
         if topic is None:
             return
         self.current_topic = topic.key
-        self.browser.setHtml(topic_html(topic))
+        self.browser.setHtml(topic_html(topic, current_theme(self)))
         self.browser.moveCursor(QTextCursor.MoveOperation.Start)
         self.technical_toggle.setChecked(False)
         self.technical_toggle.setVisible(bool(topic.technical))
         self.technical_details.setPlainText(topic.technical)
         self.technical_details.hide()
+
+    def refresh_theme(self) -> None:
+        """Recolor an open document while keeping navigation and detail state."""
+        topic = get_topic(self.current_topic) if self.current_topic else None
+        if topic is None:
+            return
+        position = self.browser.verticalScrollBar().value()
+        self.browser.setHtml(topic_html(topic, current_theme(self)))
+        self.browser.verticalScrollBar().setValue(position)
 
     def _show_technical(self, checked: bool):
         self.technical_toggle.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)

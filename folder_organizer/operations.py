@@ -21,6 +21,8 @@ import stat
 from typing import Callable, Iterator
 import uuid
 
+from . import execution_log
+
 STATE_DIRECTORY = ".folder-organizer"
 ORGANIZED_DIRECTORY = "정리됨"
 MODES = {"quarantine", "copy", "move", "date", "extension"}
@@ -648,7 +650,34 @@ def _retain_verified(path: Path, expected: dict, root: Path, operation_id: str,
     return holding
 
 
+def _execution_event(event: str, **metadata) -> None:
+    # Even a broken logging backend must never alter file-operation results.
+    try:
+        execution_log.record_execution(event, **metadata)
+    except Exception:
+        pass
+
+
 def execute_plan(plan: dict, *, progress_detail: Callable[[dict], None] | None = None) -> dict:
+    """Execute a preview and retain bounded, nonfatal execution receipts."""
+    identifier = plan.get("id", "") if isinstance(plan, dict) else ""
+    action = plan.get("mode", "unknown") if isinstance(plan, dict) else "unknown"
+    _execution_event("execution.started", execution_id=identifier, action=action,
+                     status="started", message="파일 정리 실행을 시작합니다.")
+    try:
+        result = _execute_plan(plan, progress_detail=progress_detail)
+    except Exception as exc:
+        _execution_event("execution.failed", execution_id=identifier, action=action,
+                         status="failed", message="파일 정리 실행이 중단되었습니다.", error=str(exc))
+        raise
+    _execution_event("execution.finished", execution_id=identifier, action=action,
+                     status=result["status"], message="파일 정리 처리 결과입니다.",
+                     completed=sum(item["state"] == "completed" for item in result["items"]),
+                     total=len(result["items"]))
+    return result
+
+
+def _execute_plan(plan: dict, *, progress_detail: Callable[[dict], None] | None = None) -> dict:
     """Execute an unchanged preview. Individual failures never discard originals."""
     _check_signature(plan, _PLAN_KEY)
     directory = _root(plan["root"])
@@ -717,6 +746,10 @@ def execute_plan(plan: dict, *, progress_detail: Callable[[dict], None] | None =
                     item["state"] = "failed"
                     item["target_created"] = False
             _write_journal(journal_path, journal, key)
+            _execution_event("execution.item", execution_id=journal["id"], action=journal["mode"],
+                             status=item["state"], message="파일별 정리 결과입니다.",
+                             source=str(source), target=str(target), error=item.get("error"),
+                             completed=index, total=len(journal["items"]))
             _progress(progress_detail, "execute", index, len(journal["items"]), f"작업 처리: {source.name}")
         successes = sum(item["state"] == "completed" for item in journal["items"])
         journal["status"] = "completed" if successes == len(journal["items"]) else "partial" if successes else "failed"
@@ -758,6 +791,24 @@ def list_history(root: str | Path, *, progress_detail: Callable[[dict], None] | 
 
 def undo_operation(root: str | Path, operation_id: str, *,
                    progress_detail: Callable[[dict], None] | None = None) -> dict:
+    """Restore a journalled operation with separate, nonfatal execution receipts."""
+    _execution_event("execution.started", execution_id=operation_id, action="undo",
+                     status="started", message="작업 되돌리기를 시작합니다.")
+    try:
+        result = _undo_operation(root, operation_id, progress_detail=progress_detail)
+    except Exception as exc:
+        _execution_event("execution.failed", execution_id=operation_id, action="undo",
+                         status="failed", message="작업 되돌리기가 중단되었습니다.", error=str(exc))
+        raise
+    _execution_event("execution.finished", execution_id=operation_id, action="undo",
+                     status=result["status"], message="작업 되돌리기 처리 결과입니다.",
+                     completed=sum(item["state"] in {"restored", "unchanged"} for item in result["items"]),
+                     total=len(result["items"]))
+    return result
+
+
+def _undo_operation(root: str | Path, operation_id: str, *,
+                   progress_detail: Callable[[dict], None] | None = None) -> dict:
     """Restore moved files or remove unchanged copies; conflicts remain recoverable."""
     directory = _root(root)
     if not re.fullmatch(r"[0-9a-f]{32}", operation_id):
@@ -773,9 +824,15 @@ def undo_operation(root: str | Path, operation_id: str, *,
         for index, item in enumerate(reversed(journal["items"]), 1):
             _progress(progress_detail, "undo", index - 1, total, f"복원 확인: {Path(item['source']).name}")
             if item["state"] in {"restored", "unchanged"}:
+                _execution_event("execution.item", execution_id=journal["id"], action="undo",
+                                 status="unchanged", message="이미 되돌렸거나 변경할 내용이 없습니다.",
+                                 source=item["source"], target=item["target"], completed=index, total=total)
                 continue
             if not item.get("target_created"):
                 item["state"] = "unchanged"
+                _execution_event("execution.item", execution_id=journal["id"], action="undo",
+                                 status="unchanged", message="이전 작업에서 바뀌지 않은 파일입니다.",
+                                 source=item["source"], target=item["target"], completed=index, total=total)
                 continue
             source, target = Path(item["source"]), Path(item["target"])
             try:
@@ -820,6 +877,10 @@ def undo_operation(root: str | Path, operation_id: str, *,
                 item["state"] = "undo_failed"
                 item["error"] = str(exc)
             _write_journal(journal_path, journal, key)
+            _execution_event("execution.item", execution_id=journal["id"], action="undo",
+                             status=item["state"], message="파일별 되돌리기 결과입니다.",
+                             source=str(source), target=str(target), error=item.get("error"),
+                             completed=index, total=total)
         journal["status"] = "undone" if all(item["state"] in {"restored", "unchanged"} for item in journal["items"]) else "partial_undo"
         _write_journal(journal_path, journal, key)
         _progress(progress_detail, "undo", total, total, "복원 처리 완료")

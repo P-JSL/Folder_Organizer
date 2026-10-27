@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 — 2026-10-28
+
+- Move navigation to header dropdown menus and keep the main screen focused on the current step.
+- Add saved dark and light themes, with dark as the default, across the main window and dialogs.
+- Expand folder mappings with Korean and English tokens, rule names, date formats and explicit modified/created dates; keep copy as the default and warn when creation dates are unavailable.
+- Add a separate searchable execution log for actual file operations while retaining activity diagnostics and signed undo history.
+- Add previewed, non-overwriting UTF-8 text/Markdown paragraph and CSV/TSV row merges; preserve original files by default and offer verified output followed by recoverable original archiving.
+- Make the exact-duplicate keep-first action easier to find and explain its retained files, confirmation and safe-storage behavior.
+- Update feature help, user guides and reproducible screenshots for the new menus, rules, logs and merge workflow.
+
 ## 0.3.1 — 2026-10-27
 
 - Guide the next action from the current folder, analysis, result and checkbox state.

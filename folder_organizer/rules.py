@@ -7,10 +7,12 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from fnmatch import fnmatchcase
+import math
 import os
 from pathlib import Path
 import re
 from string import Formatter
+from types import SimpleNamespace
 from typing import Callable
 
 from . import operations as ops
@@ -22,15 +24,33 @@ RULE_GUIDELINES = (
     "먼저 복사로 작은 폴더를 시험하세요. 이동은 검증된 복사본과 원본 보호 사본을 남깁니다.\n"
     "확장자는 pdf,jpg처럼 쉼표로 입력하고, 이름에는 *.pdf 같은 와일드카드를 사용할 수 있습니다.\n"
     "폴더 조건은 상대 경로입니다. 예: 청구서 또는 업무/청구서 — 해당 폴더 아래 파일에도 적용합니다.\n"
-    "날짜 조건은 수정일 기준이며 시작일·종료일을 모두 포함합니다.\n"
-    "대상 폴더에는 {type}, {year}, {month}, {ext}, {source_folder}를 사용할 수 있습니다. "
+    "날짜 조건은 선택한 수정일·생성일 기준이며 시작일·종료일을 모두 포함합니다.\n"
+    "대상 폴더에는 {종류}, {날짜}, {규칙}, {확장자}, {원래폴더}와 영어 표기를 사용할 수 있습니다. "
+    "예: {수정일:%Y/%m/%d}, {created:%Y-%m}, {year}/{quarter}분기. 생성일이 없으면 생성일 규칙은 건너뜁니다.\n"
     "{source_folder}를 넣으면 기존 하위 폴더 구조를 유지합니다. 파일명은 그대로 붙습니다.\n"
     "보호 폴더·이미 분류된 출력 폴더·일치하지 않는 파일·앱 번들 내부는 자동 처리하지 않습니다.\n"
     "완전 중복 자동 분류는 원본을 최소 하나 남기고 나머지를 격리합니다. 유사 후보는 제외합니다.\n"
     "미리보기 확인과 실행 직전 재검증이 모두 필요합니다. 결과는 작업 기록에서 되돌릴 수 있습니다."
 )
 
-_FIELDS = {"type", "year", "month", "ext", "source_folder"}
+_DATE_PARTS = {"year", "month", "day", "date", "weekday", "quarter", "week", "hour", "minute", "second"}
+_ALIASES = {
+    "종류": "type", "확장자": "ext", "원래폴더": "source_folder", "규칙": "rule", "이름": "name",
+    "연도": "year", "년": "year", "월": "month", "일": "day", "날짜": "date",
+    "요일": "weekday", "분기": "quarter", "주차": "week", "시": "hour", "분": "minute", "초": "second",
+    "수정일": "modified", "생성일": "created", "stem": "name",
+}
+for _basis, _korean in (("modified", "수정"), ("created", "생성")):
+    for _part, _label in (("year", "연도"), ("month", "월"), ("day", "일"), ("date", "날짜"),
+                          ("weekday", "요일"), ("quarter", "분기"), ("week", "주차"),
+                          ("hour", "시"), ("minute", "분"), ("second", "초")):
+        # 수정일/생성일 are date values, so explicit day aliases use 수정날/생성날.
+        _ALIASES[_korean + ("날" if _part == "day" else _label)] = _basis + "_" + _part
+_FIELDS = {"type", "ext", "source_folder", "rule", "name", "modified", "created"} | _DATE_PARTS | {
+    f"{basis}_{part}" for basis in ("modified", "created") for part in _DATE_PARTS
+}
+_ALIASES.update({field: field for field in _FIELDS})
+_DATE_DIRECTIVES = {"Y", "m", "d", "H", "M", "S", "j", "u", "V", "G", "%"}
 _INVALID = re.compile(r'[<>:"|?*\x00-\x1f]')
 _RESERVED = re.compile(r"(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?", re.I)
 _TYPES = {
@@ -48,11 +68,155 @@ def default_rules(preset: str = "type") -> list[dict]:
         "type": ("파일 종류별 분류", "{type}/{source_folder}"),
         "date": ("수정 연도·월별 분류", "{year}/{month}/{source_folder}"),
         "folder": ("기존 폴더 구조 보존", "폴더별/{source_folder}"),
+        "daily": ("수정 날짜별 분류", "{date}/{source_folder}"),
+        "created_date": ("생성 연도·월별 분류", "{created:%Y/%m}/{source_folder}"),
+        "quarter": ("수정 분기별 분류", "{year}/{quarter}분기/{source_folder}"),
+        "rule": ("규칙 이름별 분류", "{rule}/{type}/{source_folder}"),
     }
     if preset not in presets:
         raise ValueError("지원하지 않는 분류 프리셋입니다.")
     name, target = presets[preset]
-    return validate_rules([{"name": name, "target": target}])
+    return validate_rules([{"name": name, "target": target,
+                            "date_basis": "created" if preset == "created_date" else "modified"}])
+
+
+def mapping_tokens() -> list[dict[str, str]]:
+    """Describe supported folder mappings without reading files or evaluating code."""
+    entries = [
+        ("{종류}", "파일 종류", "사진", "사진·문서·동영상 등 파일 종류"),
+        ("{확장자}", "확장자", "jpg", "점 없는 파일 확장자"),
+        ("{원래폴더}", "원래 하위 폴더", "업무/청구서", "원래 상대 폴더 구조를 유지합니다. 루트 파일은 ‘루트’입니다."),
+        ("{규칙}", "규칙 이름", "회사 청구서", "현재 적용된 규칙 이름을 안전한 폴더 이름으로 사용합니다."),
+        ("{이름}", "파일 이름", "보고서", "확장자를 뺀 원래 파일 이름입니다. 실제 파일 이름은 바꾸지 않습니다."),
+        ("{연도}", "기준 연도", "2026", "선택한 날짜 기준의 연도. 기본은 수정일입니다."),
+        ("{월}", "기준 월", "10", "선택한 날짜 기준의 두 자리 월"),
+        ("{일}", "기준 일", "15", "선택한 날짜 기준의 두 자리 일"),
+        ("{날짜}", "기준 날짜", "2026-10-15", "선택한 날짜 기준의 연-월-일"),
+        ("{요일}", "기준 요일", "목", "월·화·수·목·금·토·일"),
+        ("{분기}", "기준 분기", "4", "1~4분기 번호. 예: {연도}/{분기}분기"),
+        ("{주차}", "기준 주차", "42", "ISO 주차 01~53. 연도 경계에서는 날짜 연도와 다를 수 있습니다."),
+        ("{수정일:%Y-%m-%d}", "수정일 날짜 형식", "2026-10-15", "수정일을 지정한 날짜 형식으로 매핑합니다."),
+        ("{수정일:%Y/%m}", "수정 연도/월 폴더", "2026/10", "수정 연도와 월을 서로 다른 폴더로 만듭니다."),
+        ("{생성일:%Y-%m-%d}", "생성일 날짜 형식", "2025-03-07", "실제 생성일이 제공될 때만 사용합니다. 없으면 파일을 건너뜁니다."),
+        ("{created:%Y/%m}", "생성 연도/월 폴더", "2025/03", "생성일 영어 표기. 수정일로 대신하지 않습니다."),
+        ("{modified_year}", "명시적 수정 연도", "2026", "선택한 날짜 기준과 관계없이 수정일 연도입니다."),
+        ("{created_year}", "명시적 생성 연도", "2025", "선택한 날짜 기준과 관계없이 실제 생성일 연도입니다."),
+        ("{type}", "종류 · 영어", "사진", "{종류}와 같습니다."),
+        ("{ext}", "확장자 · 영어", "jpg", "{확장자}와 같습니다."),
+        ("{source_folder}", "원래 폴더 · 영어", "업무/청구서", "{원래폴더}와 같습니다."),
+        ("{rule}", "규칙 이름 · 영어", "회사 청구서", "{규칙}과 같습니다."),
+        ("{name}", "파일 이름 · 영어", "보고서", "{이름}과 같습니다."),
+        ("{stem}", "파일 이름 · 확장자 제외", "보고서", "{이름}, {name}과 같습니다. 실제 파일 이름은 바꾸지 않습니다."),
+        ("{year}", "기준 연도 · 영어", "2026", "{연도}와 같습니다. 기존 규칙은 수정일 기준을 유지합니다."),
+        ("{month}", "기준 월 · 영어", "10", "{월}과 같습니다."),
+        ("{day}", "기준 일 · 영어", "15", "{일}과 같습니다."),
+        ("{date}", "기준 날짜 · 영어", "2026-10-15", "{날짜}와 같습니다."),
+    ]
+    return [{"token": token, "label": label, "example": example, "description": description}
+            for token, label, example, description in entries]
+
+
+def _template_parts(template: str):
+    if not isinstance(template, str) or not template.strip() or len(template) > 512:
+        raise ValueError("대상 폴더 템플릿은 1~512자여야 합니다.")
+    parts = list(Formatter().parse(template))
+    for _literal, field, spec, conversion in parts:
+        if field is None:
+            continue
+        canonical = _ALIASES.get(field)
+        if canonical is None or conversion:
+            raise ValueError("지원하는 {규칙} 기호만 사용하세요. 속성·인덱스·형식 변환은 사용할 수 없습니다.")
+        if spec:
+            if canonical not in {"modified", "created"} or len(spec) > 100 or "{" in spec or "}" in spec:
+                raise ValueError("날짜 형식은 {수정일:%Y-%m-%d}, {생성일:%Y/%m}처럼 입력하세요.")
+            index = 0
+            while index < len(spec):
+                if spec[index] == "%":
+                    if index + 1 == len(spec) or spec[index + 1] not in _DATE_DIRECTIVES:
+                        raise ValueError("날짜 형식은 %Y·%m·%d·%H·%M·%S·%j·%u·%V·%G·%%만 사용할 수 있습니다.")
+                    index += 2
+                else:
+                    index += 1
+    return parts
+
+
+def _safe_component(value: str, fallback: str) -> str:
+    value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value).strip(" .")
+    if not value:
+        return fallback
+    if _RESERVED.fullmatch(value) or value.casefold() == ops.STATE_DIRECTORY.casefold():
+        value = "_" + value
+    return value[:100].rstrip(" .") or fallback
+
+
+def _moment(entry, basis: str) -> datetime:
+    value = getattr(entry, basis, None)
+    label = "생성일" if basis == "created" else "수정일"
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"{label}을 제공하지 않아 해당 날짜 규칙을 적용할 수 없습니다.")
+    try:
+        return datetime.fromtimestamp(value)
+    except (OSError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{label}을 사용할 수 있는 날짜로 변환할 수 없습니다.") from exc
+
+
+def _date_value(moment: datetime, part: str) -> str:
+    values = {"year": f"{moment.year:04d}", "month": f"{moment.month:02d}", "day": f"{moment.day:02d}",
+              "date": moment.date().isoformat(), "weekday": "월화수목금토일"[moment.weekday()],
+              "quarter": str((moment.month - 1) // 3 + 1), "week": f"{moment.isocalendar().week:02d}",
+              "hour": f"{moment.hour:02d}", "minute": f"{moment.minute:02d}", "second": f"{moment.second:02d}"}
+    return values[part]
+
+
+def _format_date(moment: datetime, spec: str) -> str:
+    """Render the small documented format set identically on Windows and Unix.
+
+    Platform strftime implementations differ for ISO weeks and early years.
+    Parsing has already rejected unsupported directives and modifiers.
+    """
+    iso = moment.isocalendar()
+    directives = {"Y": f"{moment.year:04d}", "m": f"{moment.month:02d}", "d": f"{moment.day:02d}",
+                  "H": f"{moment.hour:02d}", "M": f"{moment.minute:02d}", "S": f"{moment.second:02d}",
+                  "j": f"{moment.timetuple().tm_yday:03d}", "u": str(iso.weekday),
+                  "V": f"{iso.week:02d}", "G": f"{iso.year:04d}", "%": "%"}
+    return re.sub(r"%([YmdHMSjuVG%])", lambda match: directives[match.group(1)], spec)
+
+
+def render_target(rule: dict, entry, relative: Path) -> str:
+    """Render a validated relative folder; never eval expressions or rename files.
+
+    Rules may be raw or normalized. Template validation uses this same renderer
+    with representative metadata, so GUI examples and real plans share semantics.
+    """
+    basis = rule.get("date_basis", "modified")
+    if basis not in {"modified", "created"}:
+        raise ValueError("날짜 기준은 수정일 또는 생성일이어야 합니다.")
+    relative = Path(relative)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError("원래 폴더는 안전한 상대 경로여야 합니다.")
+    metadata = {"type": _type(entry), "ext": ops._extension_folder(Path(entry.name)),
+                "source_folder": relative.parent.as_posix() if relative.parent != Path(".") else "루트",
+                "rule": _safe_component(rule.get("name", "규칙"), "규칙"),
+                "name": _safe_component(Path(entry.name).stem, "파일")}
+    moments = {}
+    rendered = []
+    for literal, field, spec, _conversion in _template_parts(rule.get("target", "{type}/{source_folder}")):
+        rendered.append(literal)
+        if field is None:
+            continue
+        key = _ALIASES[field]
+        if key in metadata:
+            rendered.append(metadata[key])
+            continue
+        selected_basis, part = basis, key
+        if key in {"modified", "created"}:
+            selected_basis, part = key, "date"
+        elif key.startswith(("modified_", "created_")):
+            selected_basis, part = key.split("_", 1)
+        if selected_basis not in moments:
+            moments[selected_basis] = _moment(entry, selected_basis)
+        rendered.append(_format_date(moments[selected_basis], spec) if spec else _date_value(moments[selected_basis], part))
+    return _relative_path("".join(rendered))
 
 
 def _relative_path(value: str, *, allow_glob: bool = False) -> str:
@@ -111,20 +275,26 @@ def validate_rules(rules: list[dict]) -> list[dict]:
         after, before = _day(rule.get("modified_after"), "시작일"), _day(rule.get("modified_before"), "종료일")
         if after and before and after > before:
             raise ValueError("날짜 종료일은 시작일 이상이어야 합니다.")
+        basis = rule.get("date_basis", "modified")
+        if not isinstance(basis, str) or basis not in {"modified", "created"}:
+            raise ValueError("날짜 기준은 수정일 또는 생성일이어야 합니다.")
         target = rule.get("target", "{type}/{source_folder}")
         if not isinstance(target, str):
             raise ValueError("대상 폴더 템플릿은 문자열이어야 합니다.")
+        target = target.replace("\\", "/").strip()
         try:
-            for _, field, spec, conversion in Formatter().parse(target):
-                if field is not None and (field not in _FIELDS or spec or conversion):
-                    raise ValueError("대상 템플릿에는 type, year, month, ext, source_folder만 사용할 수 있습니다.")
-            _relative_path(target.format(type="문서", year="2026", month="01", ext="txt", source_folder="업무/문서"))
+            # Validation and the editor use the exact renderer used by plans.
+            sample = SimpleNamespace(name="예시.txt", suffix=".txt",
+                                     modified=datetime(2026, 10, 15, 12, 30, 45).timestamp(),
+                                     created=datetime(2025, 3, 7, 9, 15, 20).timestamp())
+            render_target({"name": name.strip(), "target": target, "date_basis": basis},
+                          sample, Path("업무/문서/예시.txt"))
         except (KeyError, IndexError, ValueError) as exc:
             raise ValueError(f"대상 폴더 템플릿이 올바르지 않습니다: {exc}") from exc
         result.append({"name": name.strip(), "enabled": enabled, "extensions": list(dict.fromkeys(normalized)),
                        "name_pattern": name_pattern, "folder_pattern": folder_pattern,
                        "min_size": low, "max_size": high, "modified_after": after,
-                       "modified_before": before, "target": target.replace("\\", "/").strip()})
+                       "modified_before": before, "target": target, "date_basis": basis})
     return result
 
 
@@ -153,7 +323,9 @@ def _matches(entry, relative: Path, rule: dict) -> bool:
         return False
     if entry.size < rule["min_size"] or (rule["max_size"] is not None and entry.size > rule["max_size"]):
         return False
-    day = datetime.fromtimestamp(entry.modified).date().isoformat()
+    if not (rule["modified_after"] or rule["modified_before"]):
+        return True
+    day = _moment(entry, rule["date_basis"]).date().isoformat()
     return not ((rule["modified_after"] and day < rule["modified_after"]) or (rule["modified_before"] and day > rule["modified_before"]))
 
 
@@ -196,10 +368,7 @@ def build_classification_plan(scan: ScanResult, rules: list[dict], *,
             current = source.stat(follow_symlinks=False)
             if (current.st_size, current.st_mtime_ns, current.st_dev, current.st_ino) != (entry.size, entry.mtime_ns, entry.device, entry.inode):
                 raise ValueError("분석 후 파일 정보가 변경되었습니다. 다시 분석하세요.")
-            moment = datetime.fromtimestamp(entry.modified)
-            context = {"type": _type(entry), "year": moment.strftime("%Y"), "month": moment.strftime("%m"),
-                       "ext": ops._extension_folder(source), "source_folder": relative.parent.as_posix() if relative.parent != Path(".") else "루트"}
-            folder = _relative_path(rule["target"].format(**context))
+            folder = render_target(rule, entry, relative)
             if any(_within(output / folder / entry.name, protected_folder) for protected_folder in protected):
                 skipped += 1
                 warnings.append(f"분류 대상이 보호 폴더 안이어서 건너뜀: {relative}")
