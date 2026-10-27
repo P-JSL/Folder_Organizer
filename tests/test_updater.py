@@ -149,7 +149,11 @@ def test_hash_mismatch_never_changes_install(environment, monkeypatch):
 def test_unsafe_zip_paths_are_rejected(tmp_path, name):
     path = tmp_path / "download.zip"
     with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr(name, b"not executed")
+        # ZipInfo normalizes backslashes while writing on Windows. Preserve the
+        # same malicious raw local/central filename on every test platform.
+        archive.writestr(name.replace("\\", "/"), b"not executed")
+    if "\\" in name:
+        path.write_bytes(path.read_bytes().replace(name.replace("\\", "/").encode(), name.encode()))
     destination = tmp_path / "payload"
     destination.mkdir()
     with pytest.raises(updates.UpdateError):

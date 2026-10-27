@@ -13,7 +13,13 @@ from folder_organizer import recovery
 def make_zip(path: Path, entries: dict[str, bytes], compression=zipfile.ZIP_STORED) -> bytes:
     with zipfile.ZipFile(path, "w", compression=compression) as archive:
         for name, payload in entries.items():
-            archive.writestr(name, payload)
+            # ZipInfo normally converts backslashes on Windows. Preserve the
+            # requested raw ZIP member spelling to test real hostile input.
+            info = zipfile.ZipInfo(name)
+            info.filename = name
+            info.orig_filename = name
+            info.compress_type = compression
+            archive.writestr(info, payload)
     return path.read_bytes()
 
 
@@ -256,3 +262,21 @@ def test_path_stat_creation_time_does_not_conflict_with_fstat_change_time(tmp_pa
     assert inspection["status"] == "healthy", inspection
     repaired = recovery.repair_file(source, tmp_path / "out")
     assert repaired["status"] == "repaired", repaired
+
+
+def test_original_zip_member_name_checked_before_windows_normalization(tmp_path, monkeypatch):
+    source = tmp_path / "raw-backslash.zip"
+    make_zip(source, {"nested\\unsafe.txt": b"not accepted", "safe.txt": b"safe"})
+    original_init = zipfile.ZipInfo.__init__
+
+    def windows_normalized_info(info, filename="NoName", date_time=(1980, 1, 1, 0, 0, 0)):
+        original_init(info, filename, date_time)
+        info.filename = info.filename.replace("\\", "/")
+
+    monkeypatch.setattr(zipfile.ZipInfo, "__init__", windows_normalized_info)
+    inspection = recovery.inspect_file(source)
+    assert inspection["status"] == "damaged", inspection
+    result = recovery.repair_file(source, tmp_path / "out")
+    assert result["status"] == "partial", result
+    with zipfile.ZipFile(result["output"]) as archive:
+        assert archive.namelist() == ["safe.txt"]

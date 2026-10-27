@@ -155,8 +155,11 @@ def _read_archive(data: bytes) -> tuple[dict[str, bytes], list[str], bool]:
             raise UnsupportedFile("압축 항목 수 제한을 초과했습니다.")
         seen: set[str] = set()
         for info in infos:
-            if not _archive_name(info.filename):
-                issues.append(f"안전하지 않은 압축 경로 제외: {info.filename[:200]}")
+            # ZipInfo normalizes Windows separators and truncates NULs in
+            # filename. Validate the original archive spelling as well, so the
+            # same unsafe member is rejected on Windows and POSIX.
+            if not _archive_name(info.orig_filename) or not _archive_name(info.filename):
+                issues.append(f"안전하지 않은 압축 경로 제외: {info.orig_filename[:200]}")
                 continue
             folded = info.filename.casefold()
             if folded in seen:
