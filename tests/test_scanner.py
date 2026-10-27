@@ -23,6 +23,7 @@ def test_inventory_has_real_metadata_and_recursive_controls(tmp_path):
     assert entry.size == 4
     assert entry.modified == source.stat().st_mtime
     assert entry.mtime_ns == source.stat().st_mtime_ns
+    assert (entry.device, entry.inode) == (source.stat().st_dev, source.stat().st_ino)
     assert next(item for item in result.files if item.name == "installer.EXE").kind == "application"
     assert result.total_size == 14
     assert len(scan_folder(tmp_path, recursive=False).files) == 1

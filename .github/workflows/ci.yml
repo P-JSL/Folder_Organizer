@@ -20,9 +20,15 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+      - name: Install Linux Qt runtime
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libopengl0
       - run: python -m pip install -e ".[dev]"
       - run: python -m pytest -q --junitxml=test-results.xml
       - name: Report test failures
         if: failure()
         run: python scripts/report_test_failures.py
+      - name: Diagnose Windows snapshots
+        if: failure() && runner.os == 'Windows'
+        run: python scripts/windows_file_diagnostics.py
       - run: python -m build

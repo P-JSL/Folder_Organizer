@@ -109,6 +109,14 @@ def scan_folder(
                 if not stat.S_ISREG(details.st_mode):
                     result.warnings.append(f"Skipped non-regular file: {path}")
                     continue
+                # On Windows DirEntry.stat() deliberately reports st_dev/st_ino
+                # as zero. Use a path stat for the same stable file identity
+                # that open/fstat will check before hashing and recovery.
+                if os.name == "nt":
+                    details = path.stat(follow_symlinks=False)
+                    if not stat.S_ISREG(details.st_mode) or getattr(details, "st_file_attributes", 0) & 0x400:
+                        result.warnings.append(f"Skipped changed or linked file: {path}")
+                        continue
                 created, source = _creation_time(details)
                 relative = path.relative_to(folder)
                 suffix = path.suffix.casefold()

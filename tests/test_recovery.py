@@ -20,7 +20,8 @@ def make_zip(path: Path, entries: dict[str, bytes], compression=zipfile.ZIP_STOR
 def test_healthy_archive_and_unique_non_destructive_outputs(tmp_path):
     source = tmp_path / "source.zip"
     before = make_zip(source, {"a.txt": b"hello", "nested/b.txt": b"world"})
-    assert recovery.inspect_file(source)["status"] == "healthy"
+    inspection = recovery.inspect_file(source)
+    assert inspection["status"] == "healthy", inspection
     first = recovery.repair_file(source, tmp_path / "out")
     second = recovery.repair_file(source, tmp_path / "out")
     assert first["status"] == second["status"] == "repaired"
@@ -38,7 +39,8 @@ def test_corrupt_entry_salvages_only_intact_members(tmp_path):
         offset = info.header_offset + 30 + name_len + extra_len
     data[offset] ^= 0xFF
     source.write_bytes(data)
-    assert recovery.inspect_file(source)["status"] == "damaged"
+    inspection = recovery.inspect_file(source)
+    assert inspection["status"] == "damaged", inspection
     result = recovery.repair_file(source, tmp_path / "out")
     assert result["status"] == "partial"
     assert result["recovered_entries"] == 1
