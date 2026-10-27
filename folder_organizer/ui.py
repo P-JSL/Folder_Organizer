@@ -37,11 +37,12 @@ from .comparison import compare_files
 from .retention import choose_duplicate_copies
 from .reporting import build_report, write_report
 from .diagnostics import configure_logging, install_exception_hook, log_event
-from .history_view import HistoryDialog
+from .history_view import HistoryDialog, restore_effect
 from .log_view import LogViewerDialog
 from .progress import ProgressTracker
 from .rules import default_rules, validate_rules, build_classification_plan, build_duplicate_plan
 from .rule_view import ClassificationDialog
+from .help_view import HelpCenterDialog
 
 
 STYLE = """
@@ -51,9 +52,9 @@ QFrame#sidebar { background: #0b1118; border-right: 1px solid #26323e; }
 QFrame#card { background: #17232e; border: 1px solid #2a3947; border-radius: 12px; }
 QLabel { background: transparent; }
 QLabel#brand { color: #7de4ca; font-size: 22px; font-weight: 700; }
-QLabel#title { font-size: 26px; font-weight: 700; }
+QLabel#title { font-size: 23px; font-weight: 700; }
 QLabel#subtitle, QLabel#muted { color: #96a9bb; }
-QLabel#cardValue { color: #edf7fa; font-size: 25px; font-weight: 700; }
+QLabel#cardValue { color: #edf7fa; font-size: 22px; font-weight: 700; }
 QLabel#warning { color: #f4cd82; padding: 8px; background: #2c251a; border-radius: 6px; }
 QLabel#section { font-size: 15px; font-weight: 600; }
 QPushButton { padding: 9px 13px; border: 1px solid #344758; border-radius: 7px; background: #1d2b38; }
@@ -165,7 +166,7 @@ def analysis_preferences(settings: QSettings) -> dict:
 
 def evidence_scores(group: MatchGroup) -> str:
     if group.kind == "duplicate":
-        return "바이트 동일 확인"
+        return "내용 완전 일치"
     evidence = getattr(group, "evidence", {}) or {}
     labels = (("name_score", "이름"), ("text_score", "텍스트"), ("image_score", "이미지"))
     metrics = [f"{label} {evidence[key]:.2f}" for key, label in labels if isinstance(evidence.get(key), (int, float))]
@@ -611,6 +612,9 @@ class MainWindow(QMainWindow):
         self._analysis_cache = AnalysisCache()
         self._history_dialog = None
         self._log_dialog = None
+        self._help_dialog = None
+        self._guidance_action = "folder"
+        self._is_busy = False
         self.settings = QSettings("P-JSL", "FolderOrganizer")
         self.analysis_options = analysis_preferences(self.settings)
         self.match_report: dict = {}
@@ -704,18 +708,27 @@ class MainWindow(QMainWindow):
         layout.setSpacing(6)
         header = QHBoxLayout()
         titles = QVBoxLayout()
-        title = QLabel("내 파일, 한눈에 정리")
+        title = QLabel("어떤 파일을 정리할까요?")
+        self.guidance_title = title
         title.setObjectName("title")
         titles.addWidget(title)
-        subtitle = QLabel("① 폴더 선택   ›   ② 분석·비교   ›   ③ 분류 미리보기   ›   ④ 안전하게 실행")
+        subtitle = QLabel("먼저 폴더를 선택하세요. 내용을 살펴보는 동안 파일은 바뀌지 않습니다.")
+        self.guidance_text = subtitle
+        subtitle.setWordWrap(True)
         subtitle.setObjectName("subtitle")
         titles.addWidget(subtitle)
         header.addLayout(titles)
         header.addStretch()
+        self.next_step_button = self._button("폴더 선택", self._run_next_step, primary=True)
+        header.addWidget(self.next_step_button)
         self.folder_button = self._button("폴더 선택", self.choose_folder, primary=True)
         self.folder_button.setShortcut("Ctrl+O")
         self.folder_button.setToolTip("분석할 개인 폴더 선택 (Ctrl+O)")
         header.addWidget(self.folder_button)
+        self.help_button = self._button("기능 안내 · F1", self.show_help, work=False)
+        self.help_button.setShortcut("F1")
+        self.help_button.setToolTip("기능의 목적·사용 순서·실행 결과를 검색해서 확인합니다 (F1)")
+        header.addWidget(self.help_button)
         layout.addLayout(header)
 
         folder_row = QHBoxLayout()
@@ -736,23 +749,24 @@ class MainWindow(QMainWindow):
         options.addWidget(self.recursive_check)
         options.addWidget(self.hidden_check)
         options.addStretch()
-        note = QLabel("생성일 미제공 가능")
-        note.setToolTip("운영체제가 실제 생성일을 제공하지 않으면 ‘제공되지 않음’으로 표시합니다. 메타데이터 변경 시각을 생성일로 사용하지 않습니다.")
-        note.setObjectName("muted")
-        options.addWidget(note)
-        layout.addLayout(options)
         self.scope_label = QLabel()
         self.scope_label.setObjectName("muted")
-        self.scope_label.setWordWrap(True)
-        layout.addWidget(self.scope_label)
+        options.addWidget(self.scope_label)
+        options.setContentsMargins(0, 0, 0, 0)
+        self.scope_panel = QWidget()
+        self.scope_panel.setLayout(options)
+        layout.addWidget(self.scope_panel)
         self._work_controls.extend((self.recursive_check, self.hidden_check))
 
         cards = QHBoxLayout()
         self.count_label = self._card(cards, "분석한 파일", "—")
         self.size_label = self._card(cards, "전체 용량", "—")
-        self.selected_label = self._card(cards, "선택한 항목", "0개")
-        self.reclaim_label = self._card(cards, "확인된 중복 용량", "—")
-        layout.addLayout(cards)
+        self.selected_label = self._card(cards, "작업 대상 · 체크한 파일", "0개")
+        self.reclaim_label = self._card(cards, "중복 사본 용량 · 즉시 확보 아님", "—")
+        cards.setContentsMargins(0, 0, 0, 0)
+        self.summary_panel = QWidget()
+        self.summary_panel.setLayout(cards)
+        layout.addWidget(self.summary_panel)
 
         filters = QHBoxLayout()
         self.search_input = QLineEdit()
@@ -768,7 +782,10 @@ class MainWindow(QMainWindow):
         filters.addWidget(self.type_filter)
         filters.addWidget(self._button("표시 항목 선택", self.select_visible))
         filters.addWidget(self._button("선택 해제", self.clear_selection))
-        layout.addLayout(filters)
+        filters.setContentsMargins(0, 0, 0, 0)
+        self.filter_panel = QWidget()
+        self.filter_panel.setLayout(filters)
+        layout.addWidget(self.filter_panel)
 
         self.model = FileTableModel(self)
         self.proxy = FileFilter(self)
@@ -798,9 +815,14 @@ class MainWindow(QMainWindow):
         self.match_label.setObjectName("section")
         self.match_label.setWordWrap(True)
         match_header.addWidget(self.match_label, 1)
+        match_header.addWidget(self._button("결과 읽는 법", lambda: self.show_feature_help(
+            "duplicates" if self.match_kind == "duplicate" else "similar"), work=False))
         self.select_duplicates_button = self._button("첫 파일 보존 선택", self.select_duplicate_candidates)
         self.select_duplicates_button.setToolTip("경로순 첫 파일을 보존하는 규칙입니다. 보호 폴더와 현재 내용을 다시 검증한 뒤 사본을 선택합니다. 파일 변경은 별도 미리보기에서 확인합니다.")
-        match_header.addWidget(self.select_duplicates_button)
+        # The retention selector below provides the same first-file policy.
+        # Keep one visible route for choosing keepers, alongside direct removal.
+        self.select_duplicates_button.setParent(self)
+        self.select_duplicates_button.hide()
         self.keep_first_delete_button = self._button("첫 번째 파일만 남기고 나머지 삭제", self.keep_first_delete, caution=True)
         self.keep_first_delete_button.setToolTip("완전 중복 그룹에 표시된 첫 파일과 보호 폴더의 파일을 남깁니다. 나머지 사본은 원래 위치에서 안전 보관으로 옮기며, 작업 기록에서 복원할 수 있습니다. 영구 삭제하거나 디스크 공간을 확보하지 않습니다.")
         match_header.addWidget(self.keep_first_delete_button)
@@ -826,7 +848,7 @@ class MainWindow(QMainWindow):
         compare_controls.addStretch()
         compare_controls.addWidget(self._button("결과 보고서", self.export_match_report))
         matches_layout.addLayout(compare_controls)
-        self.match_explanation = QLabel("중복은 바이트 동일을 확인합니다. 유사는 검토 후보이며 각 기준 점수는 동일할 확률이 아닙니다.")
+        self.match_explanation = QLabel("중복은 내용이 완전히 같은 파일입니다. 유사는 직접 확인할 후보입니다.")
         self.match_explanation.setObjectName("muted")
         self.match_explanation.setWordWrap(True)
         matches_layout.addWidget(self.match_explanation)
@@ -837,12 +859,16 @@ class MainWindow(QMainWindow):
         self.match_tree.itemChanged.connect(self._match_selection_changed)
         self.match_tree.itemDoubleClicked.connect(lambda *_: self.compare_current_group())
         self.match_tree.setMinimumHeight(86)
-        matches_layout.addWidget(self.match_tree)
+        matches_layout.addWidget(self.match_tree, 1)
         self.views = QTabWidget()
         self.file_page = QWidget()
         file_layout = QVBoxLayout(self.file_page)
         file_layout.setContentsMargins(0, 0, 0, 0)
-        self.empty_state = QLabel("폴더를 선택하고 시작하세요\n\n파일을 분석한 뒤 중복을 비교하거나 규칙으로 분류할 수 있습니다.\n실행 전에는 원본과 대상 경로를 먼저 확인합니다.")
+        self.empty_state = QLabel("먼저 폴더를 선택하면 파일 목록을 보여드려요\n\n"
+                                 "중복 검사  ·  이름이 달라도 내용이 완전히 같은 복사본 찾기\n\n"
+                                 "유사 비교  ·  비슷한 사진·문서·이름을 찾아 직접 비교하기\n\n"
+                                 "자동 분류  ·  종류·날짜·내 규칙에 따라 폴더 나누기\n\n"
+                                 "검사만으로 파일은 바뀌지 않습니다. 기능 안내(F1)에서 예시를 볼 수 있어요.")
         self.empty_state.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_state.setObjectName("muted")
         self.empty_state.setWordWrap(True)
@@ -855,24 +881,23 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.views, 1)
 
         analysis = QHBoxLayout()
-        self.duplicates_button = self._button("중복 검사", self.analyze_duplicates)
-        self.similar_button = self._button("유사 파일 비교", self.analyze_similar)
+        self.duplicates_button = self._button("중복 검사 · 같은 내용", self.analyze_duplicates)
+        self.duplicates_button.setToolTip("이름이 달라도 내용이 완전히 같은 복사본을 찾습니다. 검사만으로 파일을 바꾸지 않습니다.")
+        self.similar_button = self._button("유사 비교 · 비슷한 내용", self.analyze_similar)
+        self.similar_button.setToolTip("이름·지원 텍스트·사진이 비슷한 후보를 찾습니다. 직접 비교한 뒤 남길 파일을 결정하세요.")
         analysis.addWidget(self.duplicates_button)
         analysis.addWidget(self.similar_button)
-        threshold_label = QLabel("이름 기준")
-        threshold_label.setObjectName("muted")
-        analysis.addWidget(threshold_label)
-        self.similarity_threshold = QDoubleSpinBox()
+        self.similarity_threshold = QDoubleSpinBox(self)
         self.similarity_threshold.setRange(0.50, 1.00)
         self.similarity_threshold.setSingleStep(0.01)
         self.similarity_threshold.setDecimals(2)
         self.similarity_threshold.setValue(self.analysis_options["name_threshold"])
         self.similarity_threshold.valueChanged.connect(self._name_threshold_changed)
         self.similarity_threshold.setToolTip("유사도 점수는 후보를 찾는 참고 값입니다. 내용이 같은 파일임을 보장하지 않습니다.")
-        analysis.addWidget(self.similarity_threshold)
+        self.similarity_threshold.hide()
         analysis.addWidget(self._button("검사 설정", self.show_analysis_settings))
-        self.classify_button = self._button("자동 분류", self.show_classification)
-        self.classify_button.setToolTip("파일·폴더 이름, 종류, 날짜와 크기 규칙으로 분류 계획을 만듭니다. 기본은 원본을 남기는 복사입니다.")
+        self.classify_button = self._button("자동 분류 · 폴더 나누기", self.show_classification)
+        self.classify_button.setToolTip("분석한 전체 파일에서 규칙에 맞는 파일을 분류합니다. 목록 체크와 검색 필터는 적용하지 않습니다. 기본은 원본을 남기는 복사입니다.")
         classification_menu = QMenu(self.classify_button)
         classification_menu.addAction("내 규칙으로 폴더·파일 분류", self.show_classification)
         self.duplicate_classification_action = classification_menu.addAction("검증된 중복 자동 분류", self.classify_duplicates)
@@ -899,6 +924,10 @@ class MainWindow(QMainWindow):
         layout.addLayout(analysis)
 
         actions = QHBoxLayout()
+        self.selection_hint = QLabel()
+        self.selection_hint.setObjectName("muted")
+        self.selection_hint.setWordWrap(True)
+        layout.addWidget(self.selection_hint)
         self.action_combo = QComboBox()
         for label, mode, basis in (("안전 보관 (실행 취소 가능)", "quarantine", "modified"),
                                    ("선택 폴더에 복사", "copy", "modified"),
@@ -907,6 +936,7 @@ class MainWindow(QMainWindow):
                                    ("생성일별 폴더로 정리", "date", "created"),
                                    ("확장자별 폴더로 정리", "extension", "modified")):
             self.action_combo.addItem(label, (mode, basis))
+        self.action_combo.currentIndexChanged.connect(self._refresh_action_hint)
         actions.addWidget(self.action_combo, 1)
         self._work_controls.append(self.action_combo)
         self.preview_button = self._button("작업 미리보기", self.preview_selected, primary=True)
@@ -946,13 +976,124 @@ class MainWindow(QMainWindow):
         self._work_controls.append(self.table)
         self._work_controls.extend((self.match_filter, self.match_tree, self.retention_rule))
         self._refresh_scope_label()
+        self._refresh_action_hint()
+        self.views.currentChanged.connect(self._refresh_guidance)
+        self.match_tree.currentItemChanged.connect(self._refresh_guidance)
+
+    def _hidden_selected_count(self, paths=None) -> int:
+        if not hasattr(self, "proxy"):
+            return 0
+        return sum(not self.proxy.mapFromSource(self.model.index(self.model.path_rows[path], 0)).isValid()
+                   for path in (self.model.checked if paths is None else paths)
+                   if path in self.model.path_rows)
+
+    def _refresh_action_hint(self, *_args):
+        if not hasattr(self, "selection_hint") or not hasattr(self, "action_combo"):
+            return
+        mode, _basis = self.action_combo.currentData() or ("quarantine", "modified")
+        effects = {
+            "quarantine": "안전 보관: 원래 위치에서 옮기고 작업 기록에서 복원합니다. 공간을 즉시 확보하지 않습니다.",
+            "copy": "복사: 원본을 남기고 대상 폴더에 사본을 만듭니다.",
+            "move": "이동: 대상 폴더로 옮기며 보호 사본과 복원 기록을 남깁니다.",
+            "date": "날짜별 정리: 선택한 날짜 기준으로 연월 폴더에 옮깁니다.",
+            "extension": "확장자별 정리: 파일 종류별 폴더로 옮깁니다.",
+        }
+        count = len(self.model.checked) if hasattr(self, "model") else 0
+        hidden = self._hidden_selected_count()
+        selection = f"수동 정리 · 체크 {count:,}개" if count else "아래 수동 정리는 체크한 파일만 대상입니다. 행 클릭은 체크가 아닙니다."
+        if hidden:
+            selection += f" · 목록 필터로 숨겨진 {hidden:,}개 포함"
+        self.selection_hint.setText(selection + "  |  " + effects[mode])
+        self.preview_button.setText(f"체크한 {count:,}개 미리보기" if count else "작업 미리보기")
+        self.preview_button.setToolTip("현재 목록에서 보이지 않는 체크 항목도 포함됩니다. 다음 화면에서 전체 원본·대상 경로를 확인하세요.")
+        self._refresh_guidance()
+
+    def _refresh_guidance(self, *_args):
+        if not hasattr(self, "next_step_button"):
+            return
+        comparison_view = self.views.currentIndex() == 1 and self.match_kind is not None
+        for panel in (self.scope_panel, self.summary_panel, self.filter_panel):
+            panel.setVisible(not comparison_view)
+        if self._is_busy:
+            title, detail, action, button = "작업을 진행하고 있어요", "아래 진행도와 경과 시간을 확인하세요. 기능 안내는 작업 중에도 볼 수 있습니다.", "none", "진행 중"
+        elif not self.root:
+            title, detail, action, button = "어떤 파일을 정리할까요?", "먼저 폴더를 선택하세요. 내용을 살펴보는 동안 파일은 바뀌지 않습니다.", "folder", "폴더 선택"
+        elif not self.scan_complete:
+            title, detail, action, button = "폴더 분석을 완료해 주세요", "검사 범위가 바뀌었거나 분석이 중단됐습니다. 다시 분석한 뒤 비교·정리할 수 있습니다.", "scan", "다시 분석"
+        elif not self.model.entries:
+            title, detail, action, button = "조건에 맞는 파일이 없어요", "검사 설정의 제외 조건을 확인하거나 다른 폴더를 선택해 보세요.", "settings", "검사 조건 확인"
+        elif self.model.checked:
+            title, detail, action, button = f"체크한 파일 {len(self.model.checked):,}개를 확인하세요", "아래에서 정리 방식을 고르세요. 미리보기에서 전체 경로를 확인해야 실행됩니다.", "preview", "변경 미리보기"
+        elif self.match_kind == "duplicate" and self.groups:
+            title, detail, action, button = "내용이 같은 파일을 찾았어요", "보존 기준을 고른 뒤 나머지 사본을 체크하세요. 첫 파일이 최신 파일을 뜻하지는 않습니다.", "retention", "남길 파일 정하기"
+        elif self.match_kind == "similar" and self.groups:
+            title, detail, action, button = "비슷한 파일은 직접 비교하세요", "후보를 선택해 두 파일을 나란히 보세요. 높은 점수만으로 같은 파일이라고 판단하지 않습니다.", "compare", "선택 후보 비교" if self.match_tree.currentItem() else "첫 후보 비교"
+            if not self.match_tree.topLevelItemCount():
+                title, detail, action, button = "현재 결과 필터에는 후보가 없어요", "전체 후보를 다시 보거나 다른 근거 필터를 골라 보세요.", "results", "전체 후보 보기"
+        elif self.match_kind:
+            title, detail, action, button = "현재 결과에 검토할 후보가 없어요", "검사 조건을 바꾸거나 종류·날짜 규칙으로 폴더를 나눠 보세요. 읽기 제한은 아래 주의 내용을 확인하세요.", "rules", "규칙으로 분류"
+        else:
+            title, detail, action, button = f"파일 {len(self.model.entries):,}개를 살펴봤어요", "같은 내용의 복사본을 찾거나, 자동 분류로 종류·날짜별 폴더를 나눌 수 있습니다.", "duplicates", "같은 파일 찾기"
+        self.guidance_title.setText(title)
+        self.guidance_text.setText(detail)
+        self._guidance_action = action
+        self.next_step_button.setText(button)
+        self.next_step_button.setVisible(action not in {"folder", "none"})
+        self.next_step_button.setEnabled(not self._is_busy)
+        self.folder_button.setText("폴더 변경" if self.root else "폴더 선택")
+        folder_style = "" if self.root else "primary"
+        if self.folder_button.objectName() != folder_style:
+            self.folder_button.setObjectName(folder_style)
+            self.folder_button.style().unpolish(self.folder_button)
+            self.folder_button.style().polish(self.folder_button)
+        ready = self.scan_complete and bool(self.model.entries) and not self._is_busy
+        for control in (self.duplicates_button, self.similar_button, self.classify_button):
+            control.setEnabled(ready)
+        for control in (self.preview_button, self.assume_duplicates_button):
+            control.setEnabled(ready and bool(self.model.checked))
+
+    def _run_next_step(self):
+        if self._is_busy:
+            return
+        if self._guidance_action == "results":
+            self.match_filter.setCurrentIndex(0)
+            self.views.setCurrentIndex(1)
+            return
+        if self._guidance_action == "compare":
+            self.views.setCurrentIndex(1)
+            if self.match_tree.currentItem() is None and self.match_tree.topLevelItemCount():
+                self.match_tree.setCurrentItem(self.match_tree.topLevelItem(0))
+        elif self._guidance_action == "retention":
+            self.views.setCurrentIndex(1)
+        actions = {"folder": self.choose_folder, "scan": self.start_scan,
+                   "settings": self.show_analysis_settings, "preview": self.preview_selected,
+                   "retention": self.select_by_retention, "compare": self.compare_current_group,
+                   "rules": self.show_classification, "duplicates": self.analyze_duplicates}
+        if not self._is_busy and self._guidance_action in actions:
+            actions[self._guidance_action]()
+
+    def show_feature_help(self, topic="start"):
+        if self._help_dialog is not None and self._help_dialog.isVisible():
+            self._help_dialog.select_topic(topic)
+            self._help_dialog.raise_()
+            self._help_dialog.activateWindow()
+            return
+        dialog = HelpCenterDialog(self, topic=topic)
+        self._help_dialog = dialog
+        def closed(_result):
+            if self._help_dialog is dialog:
+                self._help_dialog = None
+            dialog.deleteLater()
+        dialog.finished.connect(closed)
+        dialog.show()
 
     def _card(self, parent_layout, title, value):
         card = QFrame()
         card.setObjectName("card")
-        card.setFixedHeight(60)
+        card.setFixedHeight(52)
         box = QVBoxLayout(card)
-        box.setContentsMargins(16, 8, 16, 8)
+        box.setContentsMargins(14, 3, 14, 3)
+        box.setSpacing(0)
         title_widget = QLabel(title)
         title_widget.setObjectName("muted")
         box.addWidget(title_widget)
@@ -963,6 +1104,7 @@ class MainWindow(QMainWindow):
         return value_widget
 
     def set_busy(self, busy: bool, *, cancellable: bool = False):
+        self._is_busy = busy
         for control in self._work_controls:
             control.setEnabled(not busy)
         self.progress_bar.setVisible(busy)
@@ -979,6 +1121,7 @@ class MainWindow(QMainWindow):
             self.retention_button.setEnabled(self.match_kind == "duplicate" and bool(self.groups) and self.scan_complete)
             self.retention_rule.setEnabled(self.match_kind == "duplicate" and bool(self.groups) and self.scan_complete)
             self.compare_button.setEnabled(bool(self.groups) and self.scan_complete)
+        self._refresh_guidance()
 
     def _start_task(self, label: str, function: Callable[[Worker], object], success: Callable,
                     *, cancellable: bool = False, failure: Callable[[str], None] | None = None):
@@ -1133,6 +1276,9 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             self._pending_update = None
+        for dialog in (self._help_dialog, self._history_dialog, self._log_dialog):
+            if dialog is not None:
+                dialog.close()
         event.accept()
 
     def _initial_update_check(self):
@@ -1308,8 +1454,9 @@ class MainWindow(QMainWindow):
         size = f"{format_size(options['min_size'])} 이상"
         if options["max_size"] is not None:
             size += f" ~ {format_size(options['max_size'])}"
-        self.scope_label.setText(f"{PROFILE_LABELS[options['profile']]} · {scores} | 검사 범위: {size} · 제외 패턴 {len(options['exclude_patterns'])}개")
-        self.scope_label.setToolTip("검사 범위는 목록과 모든 중복·유사 검사에 적용됩니다. 검색·종류 필터는 화면 표시만 바꿉니다.\n" + "\n".join(options["exclude_patterns"]))
+        size_note = " · 크기 조건 있음" if options["min_size"] or options["max_size"] is not None else ""
+        self.scope_label.setText(f"검사 설정: {PROFILE_LABELS[options['profile']]} · 제외 조건 {len(options['exclude_patterns'])}개{size_note}")
+        self.scope_label.setToolTip(f"유사 비교 기준: {scores}\n크기 범위: {size}\n검사 범위는 전체 검사에 적용됩니다. 목록 검색은 화면 표시만 바꿉니다.\n" + "\n".join(options["exclude_patterns"]))
 
     def show_analysis_settings(self):
         dialog = AnalysisSettingsDialog(self.analysis_options, self)
@@ -1350,16 +1497,7 @@ class MainWindow(QMainWindow):
         self.compare_button.setEnabled(False)
 
     def show_comparison_guide(self):
-        self._show_details("중복과 유사 · 판단 기준", {
-            "정확한 중복": "파일 크기와 SHA-256을 비교한 다음 실제 바이트까지 같은지 검증합니다. 이름·위치·날짜가 달라도 내용이 완전히 같으면 중복입니다.",
-            "이름만 유사": "report.txt와 report copy.txt처럼 정규화한 이름이 비슷합니다. 내용이 전혀 다를 수 있으며 이미지·문서 내용을 확인한 증거가 아닙니다.",
-            "텍스트 유사": "지원되는 작은 UTF-8 텍스트의 어구 겹침을 비교합니다. 공백·문구 변화나 문서 버전을 검토하는 참고 기준이며 파일 전체가 같다는 뜻은 아닙니다.",
-            "이미지 유사": "축소한 이미지의 구조·색·투명도·종횡비를 비교합니다. 사진 크기나 저장 형식이 달라도 후보가 될 수 있지만, 손실·편집·품질·의미를 보증하지 않습니다.",
-            "점수의 의미": "이름·텍스트·이미지 점수는 서로 다른 기준입니다. 1.00 또는 높은 점수도 같은 파일일 확률이 아닙니다. 바이트 동일 여부는 별도 검증 결과로 확인합니다.",
-            "나란히 검토": "결과 그룹을 선택해 두 파일의 크기·날짜·SHA-256, 지원 이미지 미리보기 또는 텍스트 차이를 확인하세요. 프로그램 파일은 실행하지 않습니다.",
-            "보존 규칙": "정확한 중복 그룹에서 최근·오래된 파일·짧은 경로·선호 폴더 보존을 고릅니다. 보호 폴더는 자동 선택에서 모두 남기며 각 그룹에서 적어도 하나를 보존합니다. 직접 체크한 파일은 미리보기에서 처리할 수 있습니다. 선택 후에도 미리보기와 확인이 필요합니다.",
-            "검사 한계": "유사 검사는 최대 비교 쌍 수와 메모리 제한이 있습니다. 제한·건너뜀은 결과 요약과 보고서에 표시됩니다. 큰 폴더는 검사 범위를 좁혀 다시 확인하세요.",
-        })
+        self.show_feature_help("duplicates")
 
     def choose_folder(self):
         path = QFileDialog.getExistingDirectory(self, "분석할 폴더 선택", self.root or str(Path.home()))
@@ -1429,7 +1567,7 @@ class MainWindow(QMainWindow):
         self.warning_label.setVisible(bool(notices))
         filtered = getattr(result, "filtered_files", 0)
         folders = getattr(result, "excluded_directories", 0)
-        self.status_label.setText(f"분석 완료 · 파일 {len(result.files):,}개 · {format_size(result.total_size)} · 조건 제외 파일 {filtered:,}개 / 폴더 가지 {folders:,}개. 표시 검색은 검사 범위를 바꾸지 않습니다.")
+        self.status_label.setText(f"분석 완료 · 파일 {len(result.files):,}개 · {format_size(result.total_size)} · 조건으로 건너뛴 파일 {filtered:,}개 / 폴더 {folders:,}곳. 목록 검색은 검사 범위를 바꾸지 않습니다.")
         self._filter_changed()
 
     def _filter_changed(self):
@@ -1441,6 +1579,7 @@ class MainWindow(QMainWindow):
         self.proxy.kind = self.type_filter.currentData() or "all"
         self.proxy.endFilterChange(QSortFilterProxyModel.Direction.Rows)
         self.visible_label.setText(f"표시 {self.proxy.rowCount():,} / 전체 {len(self.model.entries):,}개")
+        self._refresh_action_hint()
 
     def selected_paths(self) -> list[str]:
         return [entry.path for entry in self.model.entries if entry.path in self.model.checked]
@@ -1466,6 +1605,7 @@ class MainWindow(QMainWindow):
                     child = group.child(j)
                     child.setCheckState(0, Qt.CheckState.Checked if child.data(0, Qt.ItemDataRole.UserRole) in paths else Qt.CheckState.Unchecked)
             self.match_tree.blockSignals(False)
+        self._refresh_action_hint()
 
     def _require_scan(self, selection=False) -> bool:
         if not self.scan_result or not self.scan_complete:
@@ -1518,7 +1658,7 @@ class MainWindow(QMainWindow):
         self.views.setTabText(1, f"비교 결과 · {len(groups):,}그룹")
         self.views.setCurrentIndex(1)
         exact = kind == "duplicate"
-        title = "바이트가 완전히 같은 중복" if exact else "유사 검토 후보 · 정확한 중복은 제외"
+        title = "내용이 완전히 같은 파일" if exact else "직접 확인할 유사 후보 · 완전 중복 제외"
         self.match_label.setText(f"{title} · {len(groups):,}그룹")
         self.select_duplicates_button.setEnabled(exact and bool(groups) and self.scan_complete)
         self.retention_button.setEnabled(exact and bool(groups) and self.scan_complete)
@@ -1528,7 +1668,7 @@ class MainWindow(QMainWindow):
             sizes = {entry.path: entry.size for entry in self.model.entries}
             reclaim = sum(sum(sizes.get(path, 0) for path in group.paths[1:]) for group in groups)
             self.reclaim_label.setText(format_size(reclaim))
-            self.match_explanation.setText("같은 크기·SHA-256·실제 바이트를 확인했습니다. 보존 규칙으로 선택을 돕고, 파일 변경은 별도 미리보기와 확인 후 실행합니다.")
+            self.match_explanation.setText("보존 기준으로 남길 파일을 정하세요. ‘나머지 삭제’는 다음 화면에서 확인 후 안전 보관하며 작업 기록에서 복원할 수 있습니다.")
             self.status_label.setText(f"정확한 중복 {len(groups):,}그룹 확인 · 안전 보관과 보호 사본은 디스크 공간을 즉시 반환하지 않습니다.")
         else:
             compared = self.match_report.get("compared_pairs", 0)
@@ -1546,6 +1686,11 @@ class MainWindow(QMainWindow):
         self.warning_label.setText("\n".join(notices))
         self.warning_label.setToolTip("\n".join(map(str, self.match_report.get("warnings", []))))
         self.warning_label.setVisible(bool(notices))
+        self.match_filter.setVisible(not exact)
+        self.retention_rule.setVisible(exact)
+        self.retention_button.setVisible(exact)
+        self.keep_first_delete_button.setVisible(exact)
+        self._refresh_guidance()
 
     def _render_match_tree(self, *_args):
         if not hasattr(self, "match_tree"):
@@ -1568,7 +1713,7 @@ class MainWindow(QMainWindow):
             displayed += 1
             label = f"그룹 {index + 1} · {len(group.paths)}개"
             reason = {
-                "duplicate": "바이트 동일 확인 · 이름·날짜가 달라도 중복",
+                "duplicate": "내용이 완전히 같음 · 이름·날짜가 달라도 중복",
                 "similar_name": "이름만 유사 · 내용이 다를 수 있음",
                 "similar_text": "텍스트 어구 유사 · 문서 버전 직접 검토",
                 "similar_image": "이미지 구조·색·투명도 유사 · 품질·의미 보장 안 함",
@@ -1581,7 +1726,7 @@ class MainWindow(QMainWindow):
             self.match_tree.addTopLevelItem(parent)
             for position, path in enumerate(group.paths):
                 relative = str(Path(path).relative_to(self.root)) if self.root and Path(path).is_relative_to(self.root) else path
-                item = QTreeWidgetItem((relative, "기본 보존 기준" if group.kind == "duplicate" and position == 0 else "직접 검토 후 선택", ""))
+                item = QTreeWidgetItem((relative, "첫 파일 · 기본 보존 후보" if group.kind == "duplicate" and position == 0 else "내용 확인 후 체크", ""))
                 item.setToolTip(0, path)
                 item.setData(0, Qt.ItemDataRole.UserRole, path)
                 item.setData(0, Qt.ItemDataRole.UserRole + 1, index)
@@ -1591,6 +1736,7 @@ class MainWindow(QMainWindow):
             parent.setExpanded(displayed <= 6)
         self.match_tree.blockSignals(False)
         self.match_tree.setToolTip(f"표시 {displayed:,} / 전체 {len(self.groups):,}그룹. 근거 필터는 표시만 바꾸며 보존 규칙은 전체 중복 그룹에 적용됩니다.")
+        self._refresh_guidance()
 
     def _match_selection_changed(self, item, column):
         path = item.data(0, Qt.ItemDataRole.UserRole)
@@ -1904,19 +2050,49 @@ class MainWindow(QMainWindow):
         dialog.resize(1000, 580)
         layout = QVBoxLayout(dialog)
         text = f"총 {len(items):,}개 · {format_size(sum(item.get('size', 0) for item in items))}"
+        mode = plan.get("mode")
+        if mode in {"quarantine", "duplicate_auto"}:
+            text += "\n실행 결과: 원래 위치에서 파일을 옮겨 안전 보관합니다. 작업 기록에서 복원할 수 있습니다."
+        elif all(item.get("action") == "copy" for item in items):
+            text += "\n실행 결과: 원본은 그대로 남기고 대상 폴더에 사본을 만듭니다."
+        else:
+            text += "\n실행 결과: 대상 폴더로 옮기며, 원본 보호 사본과 복원 기록을 남깁니다."
+        if mode == "rules":
+            text += "\n작업 범위: 분석한 전체 파일 중 규칙에 맞는 항목입니다. 목록의 체크·검색 필터와는 별개입니다."
+        elif mode == "duplicate_auto":
+            text += "\n작업 범위: 검사한 전체 완전 중복 그룹 중 보존 조건을 통과한 사본입니다. 목록 체크·검색·결과 필터와는 별개입니다."
+        else:
+            text += "\n작업 범위: 파일 목록에서 체크한 항목 중 아래 표에 표시된 파일입니다."
+        hidden = self._hidden_selected_count([item.get("source") for item in items])
+        if hidden:
+            text += f"\n확인할 점: 현재 목록 필터로 숨겨진 파일 {hidden:,}개도 이 작업에 포함됩니다."
         if assumed:
             text += "\n사용자 지정: 중복 검증 없이 선택 항목 모두를 안전 보관합니다."
         if first_only:
             text += "\n각 완전 중복 그룹에 표시된 첫 파일과 보호 폴더의 파일을 남깁니다.\n나머지는 원래 위치에서 제거하고 안전 보관합니다. 영구 삭제가 아니며 용량은 확보되지 않습니다."
         intro = QLabel(text + "\n파일을 덮어쓰지 않으며 작업 기록에서 실행 취소할 수 있습니다.")
+        intro.setTextFormat(Qt.TextFormat.PlainText)
         intro.setWordWrap(True)
         layout.addWidget(intro)
         if require_confirmation:
             intro.setText(text + "\n1. 이 화면에서 원본·대상과 규칙을 확인합니다.\n2. 실행 시 파일을 다시 검증하고, 검증 사본과 복원 기록을 남깁니다. 덮어쓰지 않습니다.")
+        if mode == "duplicate_auto":
+            kept = list(dict.fromkeys(path for decision in plan.get("decisions", [])
+                                      for path in decision.get("kept", [])))
+            if kept:
+                kept_view = QPlainTextEdit()
+                kept_view.setReadOnly(True)
+                kept_view.setMaximumHeight(78)
+                kept_view.setPlainText(f"원래 위치에 남기는 파일 {len(kept):,}개\n" + "\n".join(kept[:200])
+                                       + ("\n처음 200개만 표시합니다. 나머지도 선택한 보존 기준과 보호 폴더 설정에 따라 보존합니다." if len(kept) > 200 else ""))
+                layout.addWidget(kept_view)
         if plan.get("warnings"):
             warnings = QLabel("\n".join(map(str, plan["warnings"][:8])))
+            warnings.setTextFormat(Qt.TextFormat.PlainText)
             warnings.setWordWrap(True)
             warnings.setObjectName("warning")
+            warnings.setMaximumHeight(78)
+            warnings.setToolTip(warnings.text())
             layout.addWidget(warnings)
         table = QTableView()
         table.setModel(PlanTableModel(items, table))
@@ -2068,8 +2244,9 @@ class MainWindow(QMainWindow):
         root = self.root
 
         def request_undo(operation_id: str):
+            record = next((record for record in history if record.get("id") == operation_id), None)
             answer = QMessageBox.question(
-                dialog, "원래 위치로 복원", "선택한 작업의 파일을 원래 위치로 복원할까요?\n"
+                dialog, "원래 위치로 복원", restore_effect(record) + "\n\n선택한 작업을 되돌릴까요?\n"
                 "충돌하거나 변경된 파일은 덮어쓰지 않고 결과에 표시합니다.",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No)
@@ -2128,24 +2305,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText(title + " · 세부 결과 확인 완료")
 
     def show_help(self):
-        self._show_details("Folder Organizer 사용 안내", {
-            "시작": "폴더 선택 → 파일 확인 → 중복/유사 비교 → 체크 상자 선택 → 작업 미리보기 → 실행",
-            "중복": "같은 크기, SHA-256, 실제 내용으로 검사합니다. 자동 선택은 각 그룹의 첫 파일 하나를 남깁니다.",
-            "유사": "이름·텍스트·이미지 특징이 비슷한 후보입니다. 같은 파일을 의미하지 않으며 자동 정리하지 않습니다.",
-            "중복으로 간주": "별도 버튼으로 검증 없이 사용자가 선택한 모든 파일을 안전 보관합니다. 남길 원본을 직접 확인하세요.",
-            "안전 보관": "선택한 폴더의 .folder-organizer에 보관합니다. 영구 삭제하지 않으며 보관된 파일도 용량을 차지합니다.",
-            "정리": "날짜별·확장자별 정리, 다른 폴더로 복사/이동을 지원합니다. 모든 변경 전 경로를 확인하세요.",
-            "규칙 자동 분류": "종류·이름·폴더·날짜·크기를 조건으로 첫 번째 일치 규칙을 적용합니다. 기본은 원본을 남기는 복사이며 규칙에 없는 파일과 보호 폴더는 건너뜁니다. 계획 확인 후에만 실행합니다.",
-            "중복 자동 분류": "완전 중복을 새로 검사하고 보존 규칙에 따라 최소 하나의 원본을 남깁니다. 선택된 사본만 안전 보관하며, 실행 직전 원본과 사본을 다시 확인합니다.",
-            "진행도와 로그": "전체 개수를 아는 단계는 개수와 비율을, 폴더 탐색은 발견 개수를 표시합니다. 경과 시간·단계별 예상 시간을 확인하고 활동 로그에서 처리 결과와 오류를 검색할 수 있습니다.",
-            "실행 취소": "같은 폴더의 작업 기록에서 복원합니다. 충돌 파일과 변경된 파일을 덮어쓰지 않습니다.",
-            "생성일": "운영체제가 제공하는 실제 생성일만 표시합니다. Linux 등에서는 제공되지 않을 수 있습니다.",
-            "응용 프로그램": "폴더 안의 실행 파일과 설치 패키지를 표시합니다. 설치된 앱을 제거하거나 프로그램을 실행하지 않습니다.",
-            "손상 검사와 복구": "지원 형식만 검사합니다. 원본을 보존하고 남은 데이터로 복구본을 만듭니다. 완전 복구와 삭제 파일 디스크 탐색은 지원하지 않습니다.",
-            "대용량 폴더": "분석은 백그라운드에서 진행하며 중단할 수 있습니다. 유사 비교는 자원 제한 안에서 후보를 찾습니다.",
-            "선택": "검색으로 숨긴 파일도 체크 상태를 유지합니다. 작업 미리보기에서 전체 목록을 확인하세요.",
-            "개인정보": "파일은 내 PC에서 처리하며 서버에 업로드하지 않습니다. 심볼릭 링크와 내부 보관 디렉터리는 분석하지 않습니다.",
-        })
+        self.show_feature_help("start")
 
 
 def launch() -> int:

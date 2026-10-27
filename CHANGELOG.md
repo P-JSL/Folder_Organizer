@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1 — 2026-10-27
+
+- Guide the next action from the current folder, analysis, result and checkbox state.
+- Add searchable read-only help with fourteen practical topics and optional technical criteria.
+- Explain checkbox selection, hidden checked files, automatic classification scope and operation effects before execution.
+- Give comparison results more space and keep ordinary file-list tools on their own tab.
+- Show live fictional routing examples in the rule editor, with optional advanced conditions that retain their values.
+- Distinguish undo from diagnostic logs and present readable activity details before optional support JSON.
+- Add reproducible captures of the real GUI using disposable example files and settings.
+
 ## 0.3.0 — 2026-10-27
 
 - Replace recursive journal-to-Qt container conversion with a flat, bounded history model; defer restore tasks outside history callbacks.

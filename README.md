@@ -4,6 +4,8 @@ Windows에서 **내 컴퓨터의 폴더**를 선택해 파일을 살펴보고, �
 
 ![파일 목록과 중복 검토 화면](docs/screenshot.png)
 
+처음 사용하는 순서와 실제 실행 화면은 [화면별 사용 안내](docs/GUI_GUIDE.md)를 참고하세요. 앱의 **기능 안내 · F1**에서도 기능의 목적·사용 순서·실행 결과를 검색할 수 있습니다.
+
 ## Windows에서 사용
 
 1. [Releases](https://github.com/P-JSL/Folder_Organizer/releases)에서 `FolderOrganizer-Windows-x64.zip`을 다운로드합니다. 해당 파일이 아직 없으면 아래 소스 실행 방법을 사용하세요.

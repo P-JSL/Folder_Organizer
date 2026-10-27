@@ -3,15 +3,18 @@ from __future__ import annotations
 
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 import re
+from types import SimpleNamespace
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
-    QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
-    QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from . import rules as classification_rules
 from .rules import default_rules, validate_rules
 
 
@@ -32,6 +35,46 @@ def _size_value(text: str, *, optional: bool = False) -> int | None:
     return int(amount)
 
 
+def rule_example(rule: dict, *, action: str = "copy", destination: str | None = None) -> dict[str, str]:
+    """Explain a rule with fictional paths; this never inspects user files.
+
+    The sample illustrates the destination structure, not whether a fictional
+    file satisfies every wildcard/date/size condition. The real preview makes
+    those decisions using the scanned files.
+    """
+    normalized = validate_rules([rule])[0]
+    suffix = normalized["extensions"][0] if normalized["extensions"] else ".jpg"
+    sample_name = "예시 파일" + suffix
+    context = {"type": classification_rules._type(SimpleNamespace(suffix=suffix)),
+               "year": "2026", "month": "10", "source_folder": "여행",
+               "ext": classification_rules.ops._extension_folder(Path(sample_name))}
+    folder = normalized["target"].format(**context)
+    output = (destination.strip().rstrip("/\\") if destination and destination.strip() else "선택 폴더/정리됨")
+    conditions = []
+    if normalized["extensions"]:
+        conditions.append("확장자 " + ", ".join(normalized["extensions"]))
+    if normalized["name_pattern"] != "*":
+        conditions.append("이름 " + normalized["name_pattern"])
+    if normalized["folder_pattern"] != "*":
+        conditions.append("원래 폴더 " + normalized["folder_pattern"])
+    if normalized["min_size"] or normalized["max_size"] is not None:
+        conditions.append(f"용량 {normalized['min_size']:,} B 이상" +
+                          (f" · {normalized['max_size']:,} B 이하" if normalized["max_size"] is not None else ""))
+    if normalized["modified_after"] or normalized["modified_before"]:
+        conditions.append("수정일 " + (normalized["modified_after"] or "시작 제한 없음") +
+                          " ~ " + (normalized["modified_before"] or "종료 제한 없음"))
+    conditional = " · ".join(conditions) if conditions else "모든 파일"
+    if not normalized["enabled"]:
+        conditional = "사용을 껐으므로 이 규칙은 건너뜁니다."
+    path = f"여행/{sample_name}  →  {output}/{folder}/{sample_name}"
+    outcome = ("이동: 원래 위치에서 파일을 옮기고 보호 사본·복원 기록을 남깁니다."
+               if action == "move" else "복사: 원래 파일은 그대로 두고 대상 폴더에 새 사본을 만듭니다.")
+    date_note = " 연도·월은 예시 수정일 2026-10-15 기준이며 사진 촬영일이 아닙니다." if any(
+        "{" + field + "}" in normalized["target"] for field in ("year", "month")) else ""
+    return {"conditions": conditional, "path": path, "outcome": outcome,
+            "note": "가상의 파일로 본 경로 구조입니다. 실제 조건 일치 여부와 대상은 다음 미리보기에서 확인합니다." + date_note}
+
+
 class ClassificationDialog(QDialog):
     """Edit rules without JSON or internal plan fields in the product flow."""
 
@@ -43,33 +86,43 @@ class ClassificationDialog(QDialog):
         self._rules = deepcopy(rules or default_rules("type"))
         self._current_row = -1
         self._updating = False
+        self._advanced_user_toggled = False
         self.rules_value: list[dict] = []
         self.action_value = "copy"
         self.destination_value: str | None = None
         self.values: dict = {}
         outer = QVBoxLayout(self)
-        title = QLabel("원하는 기준을 고르면 파일별 분류 계획을 만듭니다.")
+        title = QLabel("파일을 어떤 기준으로, 어디에 모을지 정하세요")
         title.setObjectName("section")
         outer.addWidget(title)
-        guide = QLabel("위에서부터 처음 맞는 규칙을 적용합니다. 일치하지 않는 파일과 보호 폴더는 건드리지 않습니다.\n"
-                       "먼저 복사로 확인하세요. 다음 화면에서 경로를 검토하고, 실행 전 다시 확인합니다.")
+        guide = QLabel("① 규칙 설정 → ② 실제 파일별 미리보기 → ③ 확인 후 실행\n"
+                       "분석한 전체 파일 중 규칙에 맞는 파일이 대상입니다. 목록의 체크·표시 필터는 분류 범위를 줄이지 않습니다.\n"
+                       "위에서부터 처음 맞는 규칙 하나를 적용합니다. 한 규칙의 조건은 모두 맞아야 하며 검사 제외·보호 폴더는 유지합니다.")
         guide.setWordWrap(True)
         guide.setObjectName("muted")
         outer.addWidget(guide)
         presets = QHBoxLayout()
         presets.addWidget(QLabel("추천 규칙"))
         self.preset_combo = QComboBox()
-        for text, key in (("파일 종류별", "type"), ("날짜별", "date"), ("원래 폴더 유지", "folder")):
+        self.preset_combo.addItem("추천 규칙 선택", None)
+        for text, key in (("종류별 · 사진/문서/…", "type"), ("수정일별 · 2026/10/…", "date"), ("기존 폴더 구조 유지", "folder")):
             self.preset_combo.addItem(text, key)
         presets.addWidget(self.preset_combo)
         self.preset_button = QPushButton("추천 규칙 불러오기")
         self.preset_button.setToolTip("현재 편집 중인 규칙을 선택한 추천 규칙으로 바꿉니다. 아직 파일은 변경하지 않습니다.")
         self.preset_button.clicked.connect(self._load_preset)
+        self.preset_button.setEnabled(False)
+        self.preset_combo.currentIndexChanged.connect(lambda: self.preset_button.setEnabled(self.preset_combo.currentData() is not None))
+        for key in ("type", "date", "folder"):
+            if self._rules == default_rules(key):
+                self.preset_combo.setCurrentIndex(self.preset_combo.findData(key))
+                break
         presets.addWidget(self.preset_button)
         presets.addStretch()
         outer.addLayout(presets)
         self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(("사용", "규칙 이름", "확장자", "파일 이름 조건", "분류할 폴더"))
+        self.table.setHorizontalHeaderLabels(("사용", "규칙 이름", "확장자 (pdf, jpg)", "이름 조건 (*.pdf)", "저장할 하위 폴더"))
+        self.table.setMinimumHeight(80)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -80,6 +133,7 @@ class ClassificationDialog(QDialog):
         self.table.setColumnWidth(3, 170)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.currentCellChanged.connect(self._row_changed)
+        self.table.itemChanged.connect(self._refresh_example)
         outer.addWidget(self.table, 1)
         row_actions = QHBoxLayout()
         for label, callback in (("규칙 추가", self._add_rule), ("선택 규칙 삭제", self._remove_rule),
@@ -89,9 +143,19 @@ class ClassificationDialog(QDialog):
             row_actions.addWidget(button)
         row_actions.addStretch()
         outer.addLayout(row_actions)
+        self.advanced_toggle = QPushButton("폴더·용량·날짜 조건과 폴더 기호 안내 (선택) ▸")
+        self.advanced_toggle.setCheckable(True)
+        self.advanced_toggle.setStyleSheet("text-align: left;")
+        self.advanced_toggle.clicked.connect(lambda: setattr(self, "_advanced_user_toggled", True))
+        self.advanced_toggle.toggled.connect(self._toggle_advanced)
+        outer.addWidget(self.advanced_toggle)
+        self.advanced_panel = QWidget()
+        self.advanced_panel.setStyleSheet("QLineEdit { padding: 5px 7px; }")
+        advanced_layout = QVBoxLayout(self.advanced_panel)
+        advanced_layout.setContentsMargins(0, 0, 0, 0)
         details = QGridLayout()
         self.folder_pattern = QLineEdit()
-        self.folder_pattern.setPlaceholderText("예: Downloads/* · 비워 두면 모든 폴더")
+        self.folder_pattern.setPlaceholderText("예: 업무/청구서 · 비우면 모든 폴더")
         self.min_size = QLineEdit()
         self.min_size.setPlaceholderText("예: 10 MB · 제한 없음")
         self.max_size = QLineEdit()
@@ -112,13 +176,31 @@ class ClassificationDialog(QDialog):
         ):
             details.addWidget(QLabel(label), row, column)
             details.addWidget(control, row, column + 1)
-        outer.addLayout(details)
-        help_text = QLabel("이름 조건: *.pdf, invoice*처럼 입력 · 확장자: pdf, jpg처럼 쉼표로 구분\n"
-                           "분류할 폴더: {type}=종류, {year}=연도, {month}=월, {ext}=확장자, {source_folder}=원래 하위 폴더\n"
-                           "예: 사진/{year}/{month}/{source_folder} · 조건이 비어 있으면 해당 조건은 제한하지 않습니다.")
+        advanced_layout.addLayout(details)
+        help_text = QLabel("폴더 기호: {type}=종류 · {ext}=확장자 · {source_folder}=원래 하위 폴더\n"
+                           "{year}/{month}=파일 수정일의 연도/월 (사진 촬영일 아님). 예: 사진/{year}/{month}/{source_folder}")
         help_text.setWordWrap(True)
         help_text.setObjectName("muted")
-        outer.addWidget(help_text)
+        advanced_layout.addWidget(help_text)
+        outer.addWidget(self.advanced_panel)
+        self.advanced_panel.hide()
+        example_frame = QFrame()
+        example_frame.setObjectName("card")
+        example_layout = QVBoxLayout(example_frame)
+        example_layout.setContentsMargins(10, 6, 10, 6)
+        example_layout.setSpacing(3)
+        self.example_heading = QLabel("선택한 규칙을 쉽게 이해하기 · 가상 파일 예시")
+        self.example_heading.setObjectName("section")
+        self.example_conditions = QLabel()
+        self.example_path = QLabel()
+        self.example_note = QLabel()
+        for control in (self.example_heading, self.example_conditions, self.example_path, self.example_note):
+            control.setTextFormat(Qt.TextFormat.PlainText)
+            control.setWordWrap(True)
+            example_layout.addWidget(control)
+        self.example_path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.example_note.setObjectName("muted")
+        outer.addWidget(example_frame)
         output = QHBoxLayout()
         self.action_combo = QComboBox()
         self.action_combo.addItem("복사 · 원본을 그대로 유지 (권장)", "copy")
@@ -135,14 +217,53 @@ class ClassificationDialog(QDialog):
         self.safety_label.setObjectName("muted")
         self.safety_label.setWordWrap(True)
         self.action_combo.currentIndexChanged.connect(self._action_changed)
+        self.destination.textChanged.connect(self._refresh_example)
+        for control in (self.folder_pattern, self.min_size, self.max_size, self.modified_after, self.modified_before):
+            control.textChanged.connect(self._refresh_example)
         outer.addWidget(self.safety_label)
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
         self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("취소")
-        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("규칙 저장 · 분류 미리보기")
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText("다음: 파일별 분류안 확인")
         self.buttons.rejected.connect(self.reject)
         self.buttons.accepted.connect(self._save)
         outer.addWidget(self.buttons)
         self._render(0)
+
+    def _toggle_advanced(self, visible: bool):
+        self.advanced_panel.setVisible(visible)
+        self.advanced_toggle.setText("폴더·용량·날짜 조건과 폴더 기호 안내 (선택) " + ("▾" if visible else "▸"))
+
+    def _refresh_example(self, *_args):
+        if self._updating or not hasattr(self, "example_path"):
+            return
+        row = self.table.currentRow()
+        if not 0 <= row < len(self._rules):
+            self.example_conditions.setText("규칙을 추가하면 저장 경로의 예시를 볼 수 있습니다.")
+            self.example_path.clear()
+            self.example_note.clear()
+            return
+        rule = deepcopy(self._rules[row])
+        try:
+            text = lambda column: self.table.item(row, column).text().strip()
+            rule.update(name=text(1), enabled=self.table.item(row, 0).checkState() == Qt.CheckState.Checked,
+                        extensions=[value.strip() for value in text(2).split(",") if value.strip()],
+                        name_pattern=text(3), target=text(4), folder_pattern=self.folder_pattern.text().strip(),
+                        min_size=_size_value(self.min_size.text()), max_size=_size_value(self.max_size.text(), optional=True),
+                        modified_after=self.modified_after.text().strip() or None,
+                        modified_before=self.modified_before.text().strip() or None)
+            example = rule_example(rule, action=self.action_combo.currentData(), destination=self.destination.text())
+            conditions = "적용 조건: " + example["conditions"]
+            self.example_conditions.setText(conditions if len(conditions) <= 220 else conditions[:217] + "…")
+            path = example["path"]
+            self.example_path.setText(path if len(path) <= 200 else path[:97] + "…" + path[-98:])
+            self.example_conditions.setToolTip(conditions[:2048])
+            self.example_path.setToolTip(path[:2048])
+            self.example_note.setText(example["note"])
+            self.safety_label.setText(example["outcome"] + " 일치하지 않는 파일과 보호 대상은 남기며 결과는 작업 기록에서 복원할 수 있습니다.")
+        except (ValueError, TypeError, AttributeError) as exc:
+            self.example_conditions.setText("입력 중인 조건을 확인하세요: " + str(exc)[:180])
+            self.example_path.clear()
+            self.example_note.setText("입력을 마치면 가상의 저장 경로 예시가 표시됩니다. 파일은 다음 화면에서 확인한 뒤 실행합니다.")
 
     def _render(self, row: int):
         self._updating = True
@@ -164,6 +285,7 @@ class ClassificationDialog(QDialog):
             self._load_details(row)
         else:
             self._load_details(-1)
+        self._refresh_example()
 
     def _read_table(self):
         for index, rule in enumerate(self._rules):
@@ -191,6 +313,11 @@ class ClassificationDialog(QDialog):
         self.max_size.setText(str(rule["max_size"]) + " B" if rule.get("max_size") is not None else "")
         self.modified_after.setText(str(rule.get("modified_after", "") or ""))
         self.modified_before.setText(str(rule.get("modified_before", "") or ""))
+        if not self._advanced_user_toggled:
+            has_filters = bool(rule.get("folder_pattern") not in (None, "", "*") or rule.get("min_size") or
+                               rule.get("max_size") is not None or rule.get("modified_after") or rule.get("modified_before"))
+            self.advanced_toggle.setChecked(has_filters)
+        self._refresh_example()
 
     def _row_changed(self, current_row: int, _column: int, _previous_row: int, _previous_column: int):
         if self._updating or current_row == self._current_row:
@@ -211,6 +338,8 @@ class ClassificationDialog(QDialog):
         self._store_details()
 
     def _load_preset(self):
+        if self.preset_combo.currentData() is None:
+            return
         self._rules = deepcopy(default_rules(self.preset_combo.currentData()))
         self._render(0)
 
@@ -259,6 +388,7 @@ class ClassificationDialog(QDialog):
         moving = self.action_combo.currentData() == "move"
         self.safety_label.setText("이동은 원래 위치를 바꿉니다. 미리보기와 최종 확인 후 실행하며, 보호 사본과 복원 기록을 남깁니다."
                                   if moving else "원본을 유지하는 복사가 기본입니다. 기존 파일은 덮어쓰지 않고, 작업 결과는 기록에 남습니다.")
+        self._refresh_example()
 
     def _save(self):
         self.values = {}

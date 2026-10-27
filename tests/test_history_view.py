@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication
 from folder_organizer.history_view import (
     HistoryDialog, HistoryTableModel, MAX_DETAIL_ITEMS, MAX_HISTORY_ROWS,
     history_details,
+    restore_effect,
 )
 from folder_organizer.operations import build_plan, execute_plan, list_history, undo_operation
 
@@ -89,6 +90,30 @@ def test_large_details_are_bounded_and_do_not_recurse(app):
     model = HistoryTableModel([record(i) for i in range(1, MAX_HISTORY_ROWS + 3)])
     assert model.rowCount() == MAX_HISTORY_ROWS
     assert model.total_records == MAX_HISTORY_ROWS + 2
+
+
+def test_copy_and_move_restore_explain_different_file_effects(app):
+    copied = record(mode="copy", items=[{"action": "copy", "source": "원본.txt", "target": "사본.txt"}])
+    moved = record(mode="rules", items=[{"action": "move", "source": "원래.txt", "target": "분류됨.txt"}])
+    assert "원본은 그대로" in restore_effect(copied)
+    assert "앱이 만든 사본" in history_details(copied)
+    assert "원래 위치로 돌려" in restore_effect(moved)
+    assert "일부 파일만 처리" in history_details(record(status="partial"))
+    assert "충돌하는 파일은 보존" in history_details(record(status="partial_undo"))
+
+
+def test_disabled_restore_explains_why_and_empty_history_explains_first_step(app):
+    dialog = HistoryDialog([record(status="undone"), record(2, items=[])])
+    assert not dialog.undo_button.isEnabled()
+    assert "이미 되돌린" in dialog.restore_hint.text()
+    dialog.table.selectRow(1)
+    app.processEvents()
+    assert "파일 목록이 없는" in dialog.restore_hint.text()
+    dialog.close()
+    empty = HistoryDialog([])
+    assert "분석만으로는 기록이 생기지" in empty.summary_label.text()
+    assert not empty.undo_button.isEnabled()
+    empty.close()
 
 
 @pytest.mark.parametrize("history", [

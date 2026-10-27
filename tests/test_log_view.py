@@ -52,3 +52,42 @@ def test_log_viewer_exports_visible_records_to_exclusive_file(viewer, tmp_path, 
     monkeypatch.setattr(log_view.QMessageBox, "warning", lambda *_args: warnings.append(True))
     widget.export_visible()
     assert warnings
+
+
+def test_plain_explanation_is_default_and_technical_fields_need_opt_in(viewer):
+    app, widget = viewer
+    diagnostics.log_event("operation.result", "파일 작업 결과", level="WARNING",
+                          operation_id="operation-456", details={"status": "partial", "items": 3})
+    widget.refresh_logs()
+    widget.table.selectRow(0)
+    app.processEvents()
+    assert "파일 정리 결과" in widget.details.toPlainText()
+    assert "일부 처리" in widget.details.toPlainText()
+    assert "파일 수: 3" in widget.details.toPlainText()
+    assert '"operation_id"' not in widget.details.toPlainText()
+    assert not widget.technical_toggle.isChecked()
+    assert widget.technical_details.isHidden()
+    widget.technical_toggle.setChecked(True)
+    assert not widget.technical_details.isHidden()
+    assert '"operation_id": "operation-456"' in widget.technical_details.toPlainText()
+    widget.technical_toggle.setChecked(False)
+    assert widget.technical_details.isHidden() and not widget.technical_details.toPlainText()
+
+
+def test_search_understands_translated_visible_activity_labels(viewer):
+    _app, widget = viewer
+    diagnostics.log_event("task.started", "폴더 확인", operation_id="translated-search")
+    widget.search_input.setText("작업 시작")
+    widget.refresh_logs()
+    assert widget.model.rowCount() == 1
+    assert widget.model.records[0]["event"] == "task.started"
+    assert widget.model.data(widget.model.index(0, 2)) == "작업 시작"
+
+
+def test_empty_filtered_log_explains_how_to_continue(viewer):
+    _app, widget = viewer
+    widget.search_input.setText("no-such-activity")
+    widget.refresh_logs()
+    assert widget.model.rowCount() == 0
+    assert "검색어와 구분 필터" in widget.details.toPlainText()
+    assert not widget.export_button.isEnabled()
