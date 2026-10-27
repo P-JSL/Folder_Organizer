@@ -52,11 +52,13 @@ def test_matching_digest_still_requires_actual_byte_comparison(tmp_path, monkeyp
     assert comparison.compare_files(files["first.bin"], files["second.bin"])["byte_identical"] is False
 
 
-def test_text_diff_preserves_line_changes_and_reports_bounded_similarity(tmp_path):
-    first = "계약서 초안입니다.\nThis is a sufficiently long shared paragraph with several words.\namount = 100\n"
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_text_diff_preserves_line_changes_and_reports_bounded_similarity(tmp_path, newline):
+    first = newline.join(("계약서 초안입니다.", "This is a sufficiently long shared paragraph with several words.", "amount = 100", ""))
     second = first.replace("100", "150")
-    (tmp_path / "draft.txt").write_text(first, encoding="utf-8")
-    (tmp_path / "revision.txt").write_text(second, encoding="utf-8")
+    # Write exact bytes so the host platform cannot translate LF to CRLF.
+    (tmp_path / "draft.txt").write_bytes(first.encode("utf-8"))
+    (tmp_path / "revision.txt").write_bytes(second.encode("utf-8"))
     files = entries(tmp_path)
     result = comparison.compare_files(files["draft.txt"], files["revision.txt"])
     assert result["byte_identical"] is False
@@ -64,6 +66,20 @@ def test_text_diff_preserves_line_changes_and_reports_bounded_similarity(tmp_pat
     assert "-amount = 100" in result["text_diff"] and "+amount = 150" in result["text_diff"]
     assert 0 < result["text_score"] < 1
     assert not result["text_diff_truncated"]
+
+
+def test_line_ending_difference_is_not_an_exact_duplicate(tmp_path):
+    text = "This is a sufficiently long shared paragraph with several words.\namount = 100\n"
+    (tmp_path / "unix.txt").write_bytes(text.encode("utf-8"))
+    windows_text = text.replace("\n", "\r\n")
+    (tmp_path / "windows.txt").write_bytes(windows_text.encode("utf-8"))
+    files = entries(tmp_path)
+    result = comparison.compare_files(files["unix.txt"], files["windows.txt"])
+    assert result["byte_identical"] is False
+    assert result["left"]["sha256"] != result["right"]["sha256"]
+    assert result["left_text"] == text and result["right_text"] == windows_text
+    assert result["text_score"] == 1
+    assert result["text_diff"] == []
 
 
 def test_short_text_keeps_diff_but_matches_discovery_score_cutoff(tmp_path):
