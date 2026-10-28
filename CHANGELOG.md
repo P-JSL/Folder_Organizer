@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 — 미출시·검토용 (2026-10-28)
+## 0.5.0 — 2026-10-28
 
 - Reuse process-authenticated duplicate results for immediate keep-first deletion with no rescan or extra confirmation; update the displayed inventory from operation receipts.
 - Move new deletions into one recoverable delete_files folder without quarantine/retained copies, skip trash folders during analysis, and retain legacy undo compatibility.
