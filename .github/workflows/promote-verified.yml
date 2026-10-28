@@ -1,0 +1,57 @@
+name: Promote verified Windows build
+run-name: Promote verified Windows build · ${{ inputs.tag }}
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable release tag with an empty draft release
+        required: true
+        type: string
+      release_sha:
+        description: Full commit SHA pinned by the release tag
+        required: true
+        type: string
+      candidate_run_id:
+        description: Successful Windows review workflow run to reuse
+        required: true
+        type: string
+      candidate_sha:
+        description: Full commit SHA tested by the review workflow
+        required: true
+        type: string
+      artifact_id:
+        description: Exact unexpired Windows artifact ID from that run
+        required: true
+        type: string
+permissions:
+  actions: read
+  contents: write
+concurrency:
+  group: verified-promotion-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reuse passed checks and upload verified package to draft
+        run: python scripts/promote_verified_release.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROMOTION_TAG: ${{ inputs.tag }}
+          PROMOTION_RELEASE_SHA: ${{ inputs.release_sha }}
+          PROMOTION_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          PROMOTION_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          PROMOTION_ARTIFACT_ID: ${{ inputs.artifact_id }}
+      - name: Preserve promotion proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-promotion-proof
+          path: release-promotion/VERIFICATION.json
+          retention-days: 14
