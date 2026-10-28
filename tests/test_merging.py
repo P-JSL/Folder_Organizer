@@ -55,7 +55,9 @@ def test_merge_and_archive_has_normal_reversible_history_leaving_output(root):
     assert not first.exists() and not second.exists()
     journal = result["archive_journal"]
     assert journal["status"] == "completed"
-    assert all(Path(item["original_backup"]).exists() for item in journal["items"])
+    assert all(Path(item["target"]).is_file() and Path(item["target"]).parent == root / "delete_files" for item in journal["items"])
+    assert not (root / ".folder-organizer" / "quarantine").exists()
+    assert not (root / ".folder-organizer" / "retained").exists()
     assert ops.list_history(root)[0]["id"] == journal["id"]
     assert ops.undo_operation(root, journal["id"])["status"] == "undone"
     assert [path.read_bytes() for path in (first, second)] == original

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QApplication, QCheckBox, QDialog, QMessageBox
 
 from folder_organizer import ui
 from folder_organizer.matching import find_duplicates
-from folder_organizer.operations import build_plan, execute_plan
+from folder_organizer.operations import build_plan, execute_plan, list_history, undo_operation
 from folder_organizer.scanner import scan_folder
 
 
@@ -134,7 +134,7 @@ def test_task_errors_are_logged_with_operation_id(app, window, monkeypatch):
     assert events[1][2]["level"] == "ERROR" and warnings
 
 
-def test_keep_first_delete_only_offers_preview_for_exact_results(app, window, tmp_path, monkeypatch):
+def test_keep_first_delete_reuses_exact_results_without_preview_or_rescan(app, window, tmp_path, monkeypatch):
     scan = populate(window, tmp_path)
     assert not window.keep_first_delete_button.isEnabled()
     groups = find_duplicates(scan.files)
@@ -142,16 +142,29 @@ def test_keep_first_delete_only_offers_preview_for_exact_results(app, window, tm
     assert not window.keep_first_delete_button.isEnabled()
     window._load_groups(groups, "duplicate")
     assert window.keep_first_delete_button.isEnabled()
-    previews = []
-    monkeypatch.setattr(window, "_show_preview", lambda plan, **kwargs: previews.append((plan, kwargs)))
+    originals = {entry.path: Path(entry.path).read_bytes() for entry in scan.files}
+    first_paths = {group.paths[0] for group in groups}
+    copies = {path for group in groups for path in group.paths[1:]}
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("Existing duplicate results must be used without another scan or preview")
+    monkeypatch.setattr(window, "_show_preview", unexpected)
+    monkeypatch.setattr(window, "start_scan", unexpected)
+    monkeypatch.setattr(ui, "find_duplicates", unexpected)
     window.keep_first_delete()
     wait(app, window)
-    plan, options = previews[0]
-    assert options == {"require_confirmation": True, "first_only": True}
-    assert len(plan["items"]) == 2
-    assert groups[0].paths[0] not in {item["source"] for item in plan["items"]}
-    assert all(Path(entry.path).exists() for entry in scan.files)
-    assert not (Path(scan.root) / ".folder-organizer").exists()
+    assert all(Path(path).is_file() for path in first_paths)
+    assert all(not Path(path).exists() for path in copies), (window.warning_label.toolTip(), window.status_label.text())
+    assert window._fast_removal_completed and window.scan_complete
+    assert not window.keep_first_delete_button.isEnabled()
+    assert {entry.path for entry in window.model.entries} == set(originals) - copies
+    history = list_history(scan.root)
+    assert len(history) == 1 and history[0]["status"] == "completed"
+    assert (Path(scan.root) / "delete_files").is_dir()
+    assert not (Path(scan.root) / ".folder-organizer" / "quarantine").exists()
+    assert not (Path(scan.root) / ".folder-organizer" / "retained").exists()
+    undo_operation(scan.root, history[0]["id"])
+    assert {path: Path(path).read_bytes() for path in originals} == originals
+    assert not (Path(scan.root) / ".folder-organizer" / "retained").exists()
 
 
 def test_classification_cannot_execute_without_explicit_path_confirmation(window, tmp_path, monkeypatch):

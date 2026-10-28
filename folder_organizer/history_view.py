@@ -111,6 +111,24 @@ def history_details(record: dict | None) -> str:
         f"선택 폴더: {_text(record.get('root'))}",
         f"지원 문의용 작업 번호: {_text(record.get('id'))}", "",
     ]
+    metadata = record.get("recovery_metadata")
+    if isinstance(metadata, dict):
+        compact = metadata.get("format") == "gzip"
+        lines.extend(("복원 정보: " + ("검증된 압축 메타데이터" if compact else "기존 작업 기록"),
+                      "경로·검증 정보와 보관된 원본 데이터로 복원합니다. 메타데이터만으로 파일 내용을 재생성하지 않습니다."))
+        if record.get("recovery_metadata_warning"):
+            lines.append(_text(record["recovery_metadata_warning"]))
+        lines.append("")
+    policy = record.get("deletion_destination")
+    if isinstance(policy, dict) and isinstance(policy.get("reason"), str):
+        lines.extend(("삭제 파일 보관: delete_files", _text(policy["reason"]), ""))
+    storage = record.get("recovery_compaction")
+    if isinstance(storage, dict):
+        amount = storage.get("saved_bytes", 0)
+        saved = amount if type(amount) is int and amount >= 0 else 0
+        lines.extend((f"복원 데이터 최적화: {_text(storage.get('processed', 0))}개 처리 · 절약량 {saved:,} B",
+                      "검증한 압축 데이터와 중복 제거한 조각으로 파일 내용을 복원합니다." if storage.get("processed") else
+                      "압축 효과가 작거나 처리가 어려운 항목은 기존 보관 방식으로 유지했습니다.", ""))
     if not isinstance(items, list):
         lines.append("파일 목록 형식이 올바르지 않습니다. 이 기록에서 복원을 요청할 수 없습니다.")
         return "\n".join(lines)
@@ -201,6 +219,7 @@ class HistoryTableModel(QAbstractTableModel):
 class HistoryDialog(QDialog):
     """Inspect journals and request restoration without entering nested workers."""
     undo_requested = Signal(str)
+    compact_requested = Signal(str)
 
     def __init__(self, history: list[dict], parent=None):
         super().__init__(parent)
@@ -254,6 +273,10 @@ class HistoryDialog(QDialog):
         self.undo_button = buttons.addButton("선택 작업 되돌리기…", QDialogButtonBox.ButtonRole.ActionRole)
         self.undo_button.setEnabled(False)
         self.undo_button.clicked.connect(self._request_undo)
+        self.compact_button = buttons.addButton("복원 데이터 용량 최적화…", QDialogButtonBox.ButtonRole.ActionRole)
+        self.compact_button.setToolTip("앱의 보관 사본만 중복 제거·무손실 압축합니다. 먼저 예상 범위를 확인하며 실제 문서와 이동한 파일은 바꾸지 않습니다.")
+        self.compact_button.setEnabled(False)
+        self.compact_button.clicked.connect(self._request_compact)
         buttons.button(QDialogButtonBox.StandardButton.Close).setText("닫기")
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -270,9 +293,15 @@ class HistoryDialog(QDialog):
         self.details.setPlainText(history_details(record))
         available = self.selected_operation_id() is not None
         self.undo_button.setEnabled(available)
+        self.compact_button.setEnabled(available)
         self.restore_hint.setText(restore_effect(record) if available else self.model.unavailable_reason(row))
 
     def _request_undo(self):
         operation_id = self.selected_operation_id()
         if operation_id is not None:
             self.undo_requested.emit(operation_id)
+
+    def _request_compact(self):
+        operation_id = self.selected_operation_id()
+        if operation_id is not None:
+            self.compact_requested.emit(operation_id)

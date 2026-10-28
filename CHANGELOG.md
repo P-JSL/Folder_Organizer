@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0 — 미출시·검토용 (2026-10-28)
+
+- Reuse process-authenticated duplicate results for immediate keep-first deletion with no rescan or extra confirmation; update the displayed inventory from operation receipts.
+- Move new deletions into one recoverable delete_files folder without quarantine/retained copies, skip trash folders during analysis, and retain legacy undo compatibility.
+- Add explicit, verified chunk deduplication and adaptive lossless compression for recovery payloads.
+- Add read-only storage summaries, largest/empty file review, quick display filters and freshly scanned recent folders.
+- Stream folder enumeration without per-directory sorting, allow unsorted core inventory for GUI use and throttle detailed progress before event allocation.
+- Add bounded indexed similarity candidates across the full inventory, with automatic/small exhaustive modes and explicit incomplete-coverage reporting; preserve full byte-verified duplicate checks.
+- Add authenticated compressed restore metadata for suitable completed operations, retain original bytes and legacy checkpoints, and fall back to valid legacy records when compression is unsuitable or unavailable.
+- Explain storage review, search limits and metadata-based restore in the interface and help; add a reproducible scaling benchmark and measured performance notes.
+
 ## 0.4.0 — 2026-10-28
 
 - Move navigation to header dropdown menus and keep the main screen focused on the current step.

@@ -11,12 +11,15 @@ import math
 import os
 from pathlib import Path
 import re
+import uuid
 from string import Formatter
 from types import SimpleNamespace
 from typing import Callable
 
 from . import operations as ops
 from .models import MatchGroup, ScanResult
+from .matching import _current_snapshot, validate_duplicate_proof
+from .deletion import DELETE_DIRECTORY
 from .retention import choose_duplicate_copies
 
 RULE_GUIDELINES = (
@@ -466,8 +469,101 @@ def build_duplicate_plan(scan: ScanResult, groups: list[MatchGroup], *,
         except (OSError, ValueError) as exc:
             plan["warnings"].append(f"중복 그룹 최종 검증 실패로 건너뜀: {exc}")
     plan["items"] = [item for item in plan["items"] if item["source"] in valid_sources]
-    if plan["items"]:
+    if plan["items"] and plan.get("deletion_storage") != "delete_files":
         ops._capacity(plan["items"])
     plan["classification_summary"] = {"matched": len(plan["items"]), "kept": len(choice["kept"]), "action": "quarantine"}
+    plan["signature"] = ops._sign(plan, ops._PLAN_KEY)
+    return plan
+
+
+def build_existing_duplicate_plan(scan: ScanResult, groups: list[MatchGroup], *,
+                                  protected_folders: list[str] | None = None,
+                                  progress_detail: Callable[[dict], None] | None = None) -> dict:
+    """Keep each displayed first file using authenticated live byte-proof state.
+
+    This dedicated one-click path performs metadata/descriptor ChangeTime checks
+    only. It never rescans, hashes files, changes checkboxes or quietly falls
+    back to a slower analysis. The executor rechecks the keeper snapshot and atomically moves owned
+    files into delete_files. Missing/stale/imported proof rejects the request.
+    """
+    if not isinstance(scan, ScanResult) or scan.cancelled:
+        raise ValueError("완료된 현재 폴더 분석이 필요합니다. 중복 검사를 다시 실행하세요.")
+    directory = ops._root(scan.root)
+    if not isinstance(groups, list) or not groups:
+        raise ValueError("현재 화면에 확인된 중복 그룹이 없습니다. 중복 검사를 실행하세요.")
+    if protected_folders is not None and (not isinstance(protected_folders, list)
+            or len(protected_folders) > 100 or any(not isinstance(path, str) or not path for path in protected_folders)):
+        raise ValueError("보호 폴더 설정이 올바르지 않습니다.")
+    protected = protected_folders or []
+    entries = {}
+    for entry in scan.files:
+        if entry.path in entries and entries[entry.path] != entry:
+            raise ValueError("분석한 파일 정보가 일관되지 않습니다. 다시 분석하세요.")
+        entries[entry.path] = entry
+    identifier = uuid.uuid4().hex
+    target_root = directory / DELETE_DIRECTORY
+    plan = {"id": identifier, "root": str(directory), "mode": "duplicate_auto",
+            "destination": str(target_root), "date_basis": "modified",
+            "created_at": datetime.now().astimezone().isoformat(),
+            "preserve_first": True, "reuse_verified_results": True, "deletion_storage": "delete_files",
+            "items": [], "decisions": [], "warnings": [],
+            "safety": ["현재 검사 근거 인증", "변경 시각·파일 식별자 재확인", "첫 항목·보호 폴더 보존", "검증 복사·복원 기록"]}
+    all_snapshots, seen_paths, seen_physical, reserved = {}, set(), set(), set()
+    target_counters = {}
+    total = sum(len(group.paths) for group in groups if isinstance(group, MatchGroup))
+    checked = 0
+    for index, group in enumerate(groups, 1):
+        snapshots = validate_duplicate_proof(group)
+        for path in group.paths:
+            if path not in entries:
+                raise ValueError("중복 파일이 현재 분석 목록에 없습니다. 다시 검사하세요.")
+            source = ops._source(path, directory)
+            normalized = str(source).casefold()
+            expected = snapshots[path]
+            entry = entries[path]
+            if (normalized in seen_paths or any(expected[key] != getattr(entry, key) for key in
+                                               ("size", "mtime_ns", "device", "inode"))):
+                raise ValueError("중복 그룹이 겹치거나 분석 정보가 변경되었습니다. 다시 검사하세요.")
+            physical = (expected["device"], expected["inode"])
+            if expected["inode"] and physical in seen_physical:
+                raise ValueError("중복 그룹에 같은 물리 파일 또는 하드링크가 겹칩니다. 다시 검사하세요.")
+            current = _current_snapshot(entry)
+            if any(current[key] != expected[key] for key in current):
+                raise ValueError("중복 검사 이후 파일이 변경되었습니다. 중복 검사를 다시 실행하세요.")
+            seen_paths.add(normalized)
+            if expected["inode"]:
+                seen_physical.add(physical)
+            all_snapshots[path] = expected
+            checked += 1
+            if progress_detail:
+                progress_detail({"phase": "duplicate_reuse", "completed": checked, "total": total,
+                                 "unit": "files", "message": f"기존 검사 근거 확인: {entry.relative_path}"})
+        first = group.paths[0]
+        kept = [path for path in group.paths if path == first or any(_within(path, folder) for folder in protected)]
+        retained = set(kept)
+        selected = [path for path in group.paths if path not in retained]
+        plan["decisions"].append({"index": index, "rule": "first", "status": "ready",
+                                  "paths": list(group.paths), "keeper": first, "kept": kept,
+                                  "selected": selected, "reason": "현재 결과의 첫 항목과 보호 폴더 파일을 보존합니다."})
+        for path in selected:
+            source = Path(path)
+            if any(parent.name.casefold().endswith(".app") for parent in source.parents):
+                raise ValueError("앱 번들의 내부 파일은 개별 정리하지 않습니다.")
+            target = ops._deletion_target(directory, source, reserved, counters=target_counters)
+            fingerprint = {key: value for key, value in snapshots[path].items() if key != "path"}
+            keeper = {**snapshots[first], "snapshot_reuse": True}
+            plan["items"].append({"source": path, "target": str(target), "action": "move",
+                                  "rule": "완전 중복 · 현재 첫 항목과 보호 폴더 보존",
+                                  **fingerprint, "snapshot_reuse": True, "duplicate_keeper": keeper,
+                                  "deletion_storage": "delete_files"})
+    # Earlier keepers may change while later groups are checked. Never replace
+    # their original ChangeTime token with a fresh one from that gap.
+    for path, expected in all_snapshots.items():
+        current = _current_snapshot(entries[path])
+        if any(current[key] != expected[key] for key in current):
+            raise ValueError("다른 그룹 확인 중 파일이 변경되었습니다. 중복 검사를 다시 실행하세요.")
+    plan["classification_summary"] = {"matched": len(plan["items"]),
+                                       "kept": sum(len(item["kept"]) for item in plan["decisions"]),
+                                       "action": "quarantine"}
     plan["signature"] = ops._sign(plan, ops._PLAN_KEY)
     return plan

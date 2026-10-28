@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 import uuid
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -48,6 +49,8 @@ from .execution_log import configure_execution_logging, record_execution
 from .execution_log_view import ExecutionLogDialog
 from .merging import execute_merge
 from .merge_view import MergeDialog
+from .inventory_summary import summarize_inventory
+from .overview_view import InventoryOverviewDialog
 
 
 STYLE = stylesheet('dark')
@@ -76,6 +79,7 @@ ANALYSIS_DEFAULTS = {
     "name_threshold": .82, "text_threshold": .90, "image_threshold": .90,
     "exclude_patterns": [], "min_size": 0, "max_size": None,
     "retention_rule": "first", "preferred_folder": "", "protected_folders": [],
+    "search_mode": "auto", "max_candidates_per_file": 32,
 }
 PROFILE_LABELS = {
     "balanced": "전체 기준 비교", "photos": "사진 검토", "documents": "문서 버전 검토", "names": "이름만 비교",
@@ -120,6 +124,8 @@ def analysis_preferences(settings: QSettings) -> dict:
             result["max_size"] = high
         if saved.get("retention_rule") in RETENTION_LABELS:
             result["retention_rule"] = saved["retention_rule"]
+        if saved.get("search_mode") in {"auto", "complete", "indexed"}:
+            result["search_mode"] = saved["search_mode"]
         preferred = saved.get("preferred_folder", "")
         if isinstance(preferred, str) and len(preferred) < 4096:
             result["preferred_folder"] = preferred
@@ -157,6 +163,14 @@ class AnalysisSettingsDialog(QDialog):
             self.profile.addItem(label, key)
         self.profile.setCurrentIndex(self.profile.findData(values["profile"]))
         form.addRow("검사 프로필", self.profile)
+        self.search_mode = QComboBox()
+        for label, mode in (("자동 · 폴더 크기에 맞게 (권장)", "auto"),
+                            ("전체 쌍 비교 · 큰 폴더는 느릴 수 있음", "complete"),
+                            ("빠른 후보 검색 · 일부 유사 파일을 놓칠 수 있음", "indexed")):
+            self.search_mode.addItem(label, mode)
+        self.search_mode.setCurrentIndex(self.search_mode.findData(values.get("search_mode", "auto")))
+        self.search_mode.setToolTip("정확한 중복 검사는 항상 전체 파일을 검증합니다. 이 설정은 유사 후보를 고르는 범위만 바꿉니다. 전체 쌍 비교도 안전 한도에 도달하면 일부 결과입니다.")
+        form.addRow("유사 후보 검색 방식", self.search_mode)
         self.methods = {}
         self.thresholds = {}
         for method, label in (("name", "파일 이름"), ("text", "UTF-8 텍스트"), ("image", "이미지 구조·색·투명도")):
@@ -283,6 +297,7 @@ class AnalysisSettingsDialog(QDialog):
             QMessageBox.information(self, "제외 패턴 확인", str(exc))
             return
         self.values = {**self.values, "profile": self.profile.currentData(), "methods": methods,
+                       "search_mode": self.search_mode.currentData(),
                        **{key + "_threshold": spin.value() for key, spin in self.thresholds.items()},
                        "exclude_patterns": patterns, "min_size": minimum, "max_size": maximum,
                        "retention_rule": self.rule.currentData(), "preferred_folder": self.preferred.text().strip(),
@@ -303,6 +318,12 @@ _DETAIL_LABELS = {
     "output_created": "새 파일 생성", "output_verified": "새 파일 검증",
     "source_count": "병합한 원본 수", "removed_units": "겹친 문단·행 수",
     "archive_journal": "원본 안전 보관 기록", "move_originals": "병합 후 원본 이동",
+    "recovery_metadata": "복원 정보 보관 방식", "format": "형식", "uncompressed_bytes": "압축 전 정보 바이트",
+    "compressed_bytes": "압축 후 정보 바이트", "recovery_metadata_warning": "복원 정보 안내",
+    "recovery_compaction": "복원 데이터 용량 최적화", "candidate_count": "보관 사본 수",
+    "processed": "최적화한 사본 수", "raw_bytes": "기존 보관 용량", "retired_raw_bytes": "줄인 보관 사본 용량",
+    "new_object_bytes": "새 복원 데이터 용량", "saved_bytes": "줄어든 보관 데이터 (파일 바이트)", "reason": "보관 방식 안내",
+    "metadata_only": "경로·검증 정보만 포함", "requires_retained_data": "보관된 파일 데이터 필요",
 }
 _DETAIL_VALUES = {
     "healthy": "정상", "damaged": "손상 감지", "unsupported": "지원하지 않는 형식 또는 크기",
@@ -312,37 +333,44 @@ _DETAIL_VALUES = {
     "skipped": "건너뜀", "copy": "복사", "move": "이동", "quarantine": "안전 보관",
     "date": "날짜별 정리", "extension": "확장자별 정리", "ok": "정상",
     "rules": "규칙별 분류", "duplicate_auto": "검증된 중복 자동 분류",
+    "unchanged": "기존 보관 방식 유지", "gzip": "압축 복원 정보", "legacy": "기존 작업 기록",
 }
 _INTERNAL_DETAIL_FIELDS = {"signature", "sha256", "mtime_ns", "device", "inode", "version", "token", "fingerprint"}
+_INTERNAL_DETAIL_FIELDS.update({"target_payload", "original_backup_payload", "undo_backup_payload", "chunks",
+                                "target_compaction", "original_backup_compaction", "undo_backup_compaction",
+                                "restore_fingerprint", "snapshot_ctime_ns", "snapshot_reuse", "target_device", "target_inode"})
 
 
 def readable_details(value, indent: int = 0) -> str:
+    if indent >= 6:
+        return "  " * indent + "[상세 항목 표시 생략]"
     """Present actionable results without exposing internal plan fields."""
     prefix = "  " * indent
     if isinstance(value, dict):
         lines = []
-        for key, item in value.items():
+        for key, item in list(value.items())[:100]:
             if key in _INTERNAL_DETAIL_FIELDS:
                 continue
             label = _DETAIL_LABELS.get(key, key)
             if isinstance(item, (list, dict)):
                 lines.append(f"{prefix}{label}")
                 lines.append(readable_details(item, indent + 1) or f"{prefix}  없음")
-            elif key == "size" and isinstance(item, int):
+            elif key in {"size", "raw_bytes", "uncompressed_bytes", "compressed_bytes", "retired_raw_bytes", "new_object_bytes", "saved_bytes"} and isinstance(item, int):
                 lines.append(f"{prefix}{label}: {format_size(item)}")
             else:
                 if isinstance(item, bool):
                     display = "예" if item else "아니요"
                 elif isinstance(item, str):
-                    display = _DETAIL_VALUES.get(item, item)
+                    display = _DETAIL_VALUES.get(item, item[:4096])
                 else:
                     display = "없음" if item is None else str(item)
                 lines.append(f"{prefix}{label}: {display}")
         return "\n".join(lines)
     if isinstance(value, (list, tuple)):
-        return "\n\n".join(f"{prefix}[{i}]\n{readable_details(item, indent + 1)}"
-                              for i, item in enumerate(value, 1))
-    return prefix + str(value)
+        text = "\n\n".join(f"{prefix}[{i}]\n{readable_details(item, indent + 1)}"
+                           for i, item in enumerate(value[:200], 1))
+        return text + (f"\n{prefix}[나머지 {len(value) - 200:,}개 표시 생략]" if len(value) > 200 else "")
+    return prefix + str(value)[:4096]
 
 
 class Worker(QThread):
@@ -413,6 +441,9 @@ class FileTableModel(QAbstractTableModel):
         self.entries: list[FileEntry] = []
         self.checked: set[str] = set()
         self.path_rows: dict[str, int] = {}
+        self.search_text: list[str] = []
+        self.sort_text: list[tuple[str, str, str]] = []
+        self._display_cache = OrderedDict()
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self.entries)
@@ -433,8 +464,21 @@ class FileTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.CheckStateRole and column == 0:
             return Qt.CheckState.Checked if entry.path in self.checked else Qt.CheckState.Unchecked
         if role == Qt.ItemDataRole.DisplayRole:
-            return ("", entry.name, "응용 프로그램" if entry.kind == "application" else (entry.suffix.upper().lstrip(".") or "파일"),
-                    format_size(entry.size), format_date(entry.modified), format_date(entry.created), entry.relative_path)[column]
+            if column == 0:
+                return ""
+            if column == 1:
+                return entry.name
+            if column == 2:
+                return "응용 프로그램" if entry.kind == "application" else (entry.suffix.upper().lstrip(".") or "파일")
+            if column == 6:
+                return entry.relative_path
+            key = index.row(), column
+            if key not in self._display_cache:
+                self._display_cache[key] = format_size(entry.size) if column == 3 else format_date(entry.modified if column == 4 else entry.created)
+                if len(self._display_cache) > 4096:
+                    self._display_cache.popitem(last=False)
+            self._display_cache.move_to_end(key)
+            return self._display_cache[key]
         if role == Qt.ItemDataRole.ToolTipRole:
             if column == 5:
                 return f"생성일 정보: {entry.created_source}. Linux 등에서 실제 생성일을 제공하지 않으면 표시하지 않습니다."
@@ -465,6 +509,10 @@ class FileTableModel(QAbstractTableModel):
         self.beginResetModel()
         self.entries = list(entries)
         self.path_rows = {item.path: i for i, item in enumerate(self.entries)}
+        self.search_text = [(item.relative_path + " " + item.name).casefold() for item in self.entries]
+        self.sort_text = [(item.name.casefold(), ("응용 프로그램" if item.kind == "application" else (item.suffix.lstrip(".") or "파일")).casefold(),
+                           item.relative_path.casefold()) for item in self.entries]
+        self._display_cache.clear()
         self.checked.clear()
         self.endResetModel()
         self.selectionChanged.emit()
@@ -489,7 +537,7 @@ class FileTableModel(QAbstractTableModel):
             return entry.modified
         if column == 5:
             return entry.created if entry.created is not None else float("-inf")
-        return str(self.data(self.index(row, column))).casefold()
+        return self.sort_text[row][{1: 0, 2: 1, 6: 2}[column]]
 
 
 class FileFilter(QSortFilterProxyModel):
@@ -501,11 +549,17 @@ class FileFilter(QSortFilterProxyModel):
         super().__init__(parent)
         self.query = ""
         self.kind = "all"
+        self.quick = "all"
+        self.age_cutoff = time.time() - 365 * 24 * 60 * 60
 
     def filterAcceptsRow(self, row, parent):
         model = self.sourceModel()
         entry = model.entries[row]
-        if self.query and self.query not in (entry.relative_path + " " + entry.name).casefold():
+        if self.query and self.query not in model.search_text[row]:
+            return False
+        if (self.quick == "large" and entry.size < 100 * 1024 ** 2
+                or self.quick == "empty" and entry.size != 0
+                or self.quick == "old" and entry.modified >= self.age_cutoff):
             return False
         suffix = entry.suffix.casefold()
         return (
@@ -583,6 +637,10 @@ class MainWindow(QMainWindow):
         self._execution_log_dialog = None
         self._merge_dialog = None
         self._merge_execute_pending = False
+        self._overview_dialog = None
+        self._match_items = {}
+        self._last_tree_checked = set()
+        self._fast_removal_completed = False
         self._guidance_action = "folder"
         self._is_busy = False
         self.settings = QSettings("P-JSL", "FolderOrganizer")
@@ -633,6 +691,9 @@ class MainWindow(QMainWindow):
         bar.setNativeMenuBar(False)
         self.file_menu = bar.addMenu("파일")
         self._menu_action(self.file_menu, "폴더 선택…", self.choose_folder, shortcut="Ctrl+O")
+        self.recent_menu = self.file_menu.addMenu("최근 폴더")
+        self._refresh_recent_menu()
+        self._work_controls.append(self.recent_menu.menuAction())
         self.scan_button = self._menu_action(self.file_menu, "다시 분석", self.start_scan, shortcut="F5")
         self.file_menu.addSeparator()
         self._menu_action(self.file_menu, "표시된 파일 모두 체크", self.select_visible, shortcut="Ctrl+A")
@@ -647,13 +708,14 @@ class MainWindow(QMainWindow):
         self.analysis_menu = bar.addMenu("검사")
         self.duplicates_button = self._menu_action(self.analysis_menu, "중복 검사 · 완전히 같은 내용", self.analyze_duplicates, shortcut="Ctrl+D")
         self.similar_button = self._menu_action(self.analysis_menu, "유사 비교 · 비슷한 이름과 내용", self.analyze_similar, shortcut="Ctrl+Shift+D")
+        self.overview_action = self._menu_action(self.analysis_menu, "용량·정리 요약…", self.show_overview)
         self.analysis_menu.addSeparator()
         self._menu_action(self.analysis_menu, "검사 범위 · 보존 설정…", self.show_analysis_settings)
 
         self.organize_menu = bar.addMenu("정리")
         self.classify_button = self._menu_action(self.organize_menu, "규칙으로 자동 분류…", self.show_classification, shortcut="Ctrl+R")
         self.duplicate_classification_action = self._menu_action(self.organize_menu, "검증된 중복 자동 분류…", self.classify_duplicates)
-        self.keep_first_delete_action = self._menu_action(self.organize_menu, "첫 번째만 남기고 나머지 삭제…", self.keep_first_delete)
+        self.keep_first_delete_action = self._menu_action(self.organize_menu, "첫 번째만 남기고 나머지 삭제", self.keep_first_delete)
         self.organize_menu.addSeparator()
         self.merge_action = self._menu_action(self.organize_menu, "체크한 파일 내용 병합…", self.show_merge, shortcut="Ctrl+M")
         self.merge_action.setToolTip("텍스트·Markdown·CSV·TSV에서 겹치는 내용을 합쳐 새 파일로 만듭니다. 원본 이동은 선택 사항입니다.")
@@ -729,6 +791,75 @@ class MainWindow(QMainWindow):
                       if self.action_combo.itemData(index) == (mode, basis)), 0)
         self.action_combo.setCurrentIndex(index)
         self.preview_selected()
+
+    def _recent_folders(self):
+        try:
+            raw = self.settings.value("navigation/recentFolders", "[]")
+            values = json.loads(raw) if isinstance(raw, str) and len(raw) <= 50_000 else []
+            if not isinstance(values, list):
+                return []
+            return list(dict.fromkeys(path for path in values if isinstance(path, str)
+                                      and 0 < len(path) <= 4096 and "\0" not in path and Path(path).is_absolute()))[:10]
+        except (ValueError, TypeError):
+            return []
+
+    def _refresh_recent_menu(self):
+        self.recent_menu.clear()
+        paths = self._recent_folders()
+        for path in paths:
+            action = self.recent_menu.addAction(path.replace("&", "&&"))
+            action.setToolTip("현재 검사 범위로 다시 분석합니다. 이전 결과를 그대로 사용하지 않습니다.")
+            action.triggered.connect(lambda _checked=False, path=path: self._open_folder(path))
+        if paths:
+            self.recent_menu.addSeparator()
+            self.recent_menu.addAction("최근 목록 지우기 · 파일은 유지", self._clear_recent_folders)
+        else:
+            self.recent_menu.addAction("아직 최근 폴더가 없습니다").setEnabled(False)
+
+    def _clear_recent_folders(self):
+        self.settings.setValue("navigation/recentFolders", "[]")
+        self._refresh_recent_menu()
+
+    def _remember_folder(self, path):
+        paths = [path] + [value for value in self._recent_folders() if value != path]
+        self.settings.setValue("navigation/recentFolders", json.dumps(paths[:10], ensure_ascii=False))
+        self._refresh_recent_menu()
+
+    def show_overview(self):
+        if not self._require_scan():
+            return
+        if self._overview_dialog is not None and self._overview_dialog.isVisible():
+            self._overview_dialog.raise_()
+            return
+        scan = self.scan_result
+        self._start_task("파일 용량과 정리 대상을 요약하고 있습니다…",
+                         lambda _worker: summarize_inventory(scan.files, scan.root, top_limit=20),
+                         lambda summary: self._show_overview(scan, summary))
+
+    def _show_overview(self, scan, summary):
+        dialog = InventoryOverviewDialog(scan, self, summary=summary)
+        self._overview_dialog = dialog
+        def choose(paths):
+            # Selection alone never performs an operation. Clear display-only
+            # filters so all newly checked paths can be reviewed immediately.
+            self.search_input.clear()
+            self.type_filter.setCurrentIndex(0)
+            self.quick_filter.setCurrentIndex(0)
+            self.views.setCurrentIndex(0)
+            self.model.set_checked(paths)
+            self.status_label.setText("기존 체크를 요약에서 고른 파일로 바꿨습니다. 정리 방식을 고르고 미리보기에서 확인하세요.")
+        def closed(_result):
+            if self._overview_dialog is dialog:
+                self._overview_dialog = None
+            dialog.deleteLater()
+        dialog.files_requested.connect(choose)
+        dialog.finished.connect(closed)
+        dialog.open()
+
+    def _clear_match_tree(self):
+        self._match_items.clear()
+        self._last_tree_checked.clear()
+        self.match_tree.clear()
 
     def _build_ui(self):
         central = QWidget()
@@ -808,6 +939,13 @@ class MainWindow(QMainWindow):
             self.type_filter.addItem(label, value)
         self.type_filter.currentIndexChanged.connect(self._filter_changed)
         filters.addWidget(self.type_filter)
+        self.quick_filter = QComboBox()
+        for label, key in (("전체 파일", "all"), ("대용량 (100 MiB 이상)", "large"),
+                           ("빈 파일 (0 B)", "empty"), ("오래된 파일 (수정 후 1년)", "old")):
+            self.quick_filter.addItem(label, key)
+        self.quick_filter.setToolTip("목록 표시만 바꿉니다. 오래된 파일은 수정일 기준이며 빈 파일도 필요한 파일일 수 있습니다. 검사 범위와 체크 상태는 유지합니다.")
+        self.quick_filter.currentIndexChanged.connect(self._filter_changed)
+        filters.addWidget(self.quick_filter)
         filters.setContentsMargins(0, 0, 0, 0)
         self.filter_panel = QWidget()
         self.filter_panel.setLayout(filters)
@@ -850,10 +988,10 @@ class MainWindow(QMainWindow):
         self.select_duplicates_button.setParent(self)
         self.select_duplicates_button.hide()
         self.keep_first_delete_button = self._button("첫 번째 파일만 남기고 나머지 삭제", self.keep_first_delete, caution=True)
-        self.keep_first_delete_button.setToolTip("완전 중복 그룹에 표시된 첫 파일과 보호 폴더의 파일을 남깁니다. 나머지 사본은 원래 위치에서 안전 보관으로 옮기며, 작업 기록에서 복원할 수 있습니다. 영구 삭제하거나 디스크 공간을 확보하지 않습니다.")
+        self.keep_first_delete_button.setToolTip("현재 검사 결과의 첫 파일과 보호 파일을 남기고 즉시 실행합니다. 전체 중복 검사를 반복하지 않으며 실행 중 변경된 파일은 처리하지 않습니다. 나머지는 복원 가능한 delete_files 폴더로 이동합니다.")
         match_header.addWidget(self.keep_first_delete_button)
         matches_layout.addLayout(match_header)
-        self.keep_first_hint = QLabel("첫 번째 파일은 남기고 나머지 사본을 정리합니다. 다음 화면 확인 → 안전 보관 → 필요하면 복원")
+        self.keep_first_hint = QLabel("클릭하면 전체 중복 그룹의 첫 파일·보호 파일을 남기고 나머지를 delete_files로 이동합니다. 추가 전체 검사 없이 실행 · 복원 가능")
         self.keep_first_hint.setObjectName("muted")
         self.keep_first_hint.setWordWrap(True)
         matches_layout.addWidget(self.keep_first_hint)
@@ -930,7 +1068,7 @@ class MainWindow(QMainWindow):
         self.selection_hint.setWordWrap(True)
         selected_layout.addWidget(self.selection_hint)
         self.action_combo = QComboBox()
-        for label, mode, basis in (("안전 보관 (실행 취소 가능)", "quarantine", "modified"),
+        for label, mode, basis in (("삭제 · delete_files로 이동 (복원 가능)", "quarantine", "modified"),
                                    ("선택 폴더에 복사", "copy", "modified"),
                                    ("선택 폴더로 이동", "move", "modified"),
                                    ("수정일별 폴더로 정리", "date", "modified"),
@@ -992,7 +1130,7 @@ class MainWindow(QMainWindow):
             return
         mode, _basis = self.action_combo.currentData() or ("quarantine", "modified")
         effects = {
-            "quarantine": "안전 보관: 원래 위치에서 옮기고 작업 기록에서 복원합니다. 공간을 즉시 확보하지 않습니다.",
+            "quarantine": "삭제 파일을 delete_files로 옮기고 목록에서 제외합니다. 작업 기록에서 복원할 수 있습니다.",
             "copy": "복사: 원본을 남기고 대상 폴더에 사본을 만듭니다.",
             "move": "이동: 대상 폴더로 옮기며 보호 사본과 복원 기록을 남깁니다.",
             "date": "날짜별 정리: 선택한 날짜 기준으로 연월 폴더에 옮깁니다.",
@@ -1023,6 +1161,8 @@ class MainWindow(QMainWindow):
             title, detail, action, button = "폴더 분석을 완료해 주세요", "검사 범위가 바뀌었거나 분석이 중단됐습니다. 다시 분석한 뒤 비교·정리할 수 있습니다.", "scan", "다시 분석"
         elif not self.model.entries:
             title, detail, action, button = "조건에 맞는 파일이 없어요", "검사 설정의 제외 조건을 확인하거나 다른 폴더를 선택해 보세요.", "settings", "검사 조건 확인"
+        elif self._fast_removal_completed:
+            title, detail, action, button = "중복 사본을 안전하게 정리했어요", "각 그룹의 첫 파일과 보호 파일은 남겼습니다. 작업 기록에서 원래 위치로 복원할 수 있습니다.", "overview", "남은 파일 요약"
         elif self.model.checked:
             title, detail, action, button = f"체크한 파일 {len(self.model.checked):,}개를 확인하세요", "아래에서 정리 방식을 고르세요. 미리보기에서 전체 경로를 확인해야 실행됩니다.", "preview", "변경 미리보기"
         elif self.match_kind == "duplicate" and self.groups:
@@ -1051,8 +1191,17 @@ class MainWindow(QMainWindow):
         for control in (self.duplicates_button, self.similar_button, self.classify_button):
             control.setEnabled(ready)
         self.merge_action.setEnabled(ready and len(self.model.checked) >= 2)
-        self.keep_first_delete_action.setEnabled(ready and self.match_kind == "duplicate" and bool(self.groups))
-        self.merge_group_button.setEnabled(ready and bool(self.groups))
+        self.keep_first_delete_action.setEnabled(ready and self.match_kind == "duplicate" and bool(self.groups) and not self._fast_removal_completed)
+        self.keep_first_delete_button.setEnabled(self.keep_first_delete_action.isEnabled())
+        has_pairs = any(len(group.paths) >= 2 for group in self.groups)
+        self.compare_button.setEnabled(ready and has_pairs)
+        self.merge_group_button.setEnabled(ready and has_pairs)
+        if self._fast_removal_completed:
+            self.keep_first_delete_button.hide()
+            self.keep_first_hint.setText("첫 파일과 보호 파일만 남았습니다. 삭제한 항목은 목록에서 제외했고 작업 기록에서 복원할 수 있습니다.")
+            self.retention_rule.hide()
+            self.retention_button.hide()
+        self.overview_action.setEnabled(ready)
         for control in (self.preview_button, self.assume_duplicates_button):
             control.setEnabled(ready and bool(self.model.checked))
 
@@ -1072,6 +1221,7 @@ class MainWindow(QMainWindow):
         actions = {"folder": self.choose_folder, "scan": self.start_scan,
                    "settings": self.show_analysis_settings, "preview": self.preview_selected,
                    "retention": self.select_by_retention, "compare": self.compare_current_group,
+                   "overview": self.show_overview,
                    "rules": self.show_classification, "duplicates": self.analyze_duplicates}
         if not self._is_busy and self._guidance_action in actions:
             actions[self._guidance_action]()
@@ -1290,7 +1440,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             self._pending_update = None
-        for dialog in (self._help_dialog, self._history_dialog, self._log_dialog, self._execution_log_dialog, self._merge_dialog):
+        for dialog in (self._help_dialog, self._history_dialog, self._log_dialog, self._execution_log_dialog, self._merge_dialog, self._overview_dialog):
             if dialog is not None:
                 dialog.close()
         event.accept()
@@ -1495,13 +1645,14 @@ class MainWindow(QMainWindow):
             self.status_label.setText("검사 설정을 저장했습니다. 변경한 기준으로 중복 또는 유사 검사를 실행하세요.")
 
     def _clear_match_results(self):
+        self._fast_removal_completed = False
         self.groups = []
         self.match_kind = None
         self.match_report = {}
         self.last_retention = None
         self.model.set_checked([])
         self.reclaim_label.setText("—")
-        self.match_tree.clear()
+        self._clear_match_tree()
         self.views.setCurrentIndex(0)
         self.views.setTabVisible(1, False)
         self.select_duplicates_button.setEnabled(False)
@@ -1516,18 +1667,24 @@ class MainWindow(QMainWindow):
     def choose_folder(self):
         path = QFileDialog.getExistingDirectory(self, "분석할 폴더 선택", self.root or str(Path.home()))
         if path:
-            self._analysis_cache.clear()
-            self.root = str(Path(path).resolve())
-            self.folder_input.setText(self.root)
-            self.model.set_entries([])
-            self.scan_result = None
-            self.scan_complete = False
-            self.groups = []
-            self.match_kind = None
-            self.match_tree.clear()
-            self.views.setCurrentIndex(0)
-            self.views.setTabVisible(1, False)
-            self.start_scan()
+            self._open_folder(path)
+
+    def _open_folder(self, path):
+        if self._is_busy or self._close_requested:
+            return
+        self._analysis_cache.clear()
+        self._remember_next_scan = True
+        self.root = str(Path(path).expanduser().absolute())
+        self.folder_input.setText(self.root)
+        self.model.set_entries([])
+        self.scan_result = None
+        self.scan_complete = False
+        self.groups = []
+        self.match_kind = None
+        self._clear_match_tree()
+        self.views.setCurrentIndex(0)
+        self.views.setTabVisible(1, False)
+        self.start_scan()
 
     def start_scan(self):
         if not self.root:
@@ -1542,15 +1699,19 @@ class MainWindow(QMainWindow):
             root, recursive=recursive, include_hidden=hidden,
             cancel=worker.cancel_event, progress=worker.report, progress_detail=worker.report_detail,
             exclude_patterns=tuple(options["exclude_patterns"]), min_size=options["min_size"],
-            max_size=options["max_size"]), self.load_scan_result, cancellable=True)
+            max_size=options["max_size"], sort_results=False), self.load_scan_result, cancellable=True)
 
     def load_scan_result(self, result: ScanResult):
         """Load a completed (or explicitly partial) scan; useful for integration tests."""
         previous_root = self.root
+        self._fast_removal_completed = False
         self.scan_result = result
         self.root = result.root
         self.folder_input.setText(result.root)
         self.scan_complete = not result.cancelled
+        if self.scan_complete and getattr(self, "_remember_next_scan", False):
+            self._remember_next_scan = False
+            self._remember_folder(result.root)
         if previous_root is not None and previous_root != result.root:
             self._analysis_cache.clear()
         self.model.set_entries(result.files)
@@ -1562,11 +1723,13 @@ class MainWindow(QMainWindow):
         self.match_kind = None
         self.match_report = {}
         self.last_retention = None
-        self.match_tree.clear()
+        self._clear_match_tree()
         self.views.setCurrentIndex(0)
         self.views.setTabVisible(1, False)
         self.views.setTabText(1, "비교 결과")
         self.count_label.setText(f"{len(result.files):,}개")
+        metrics = getattr(result, "scan_metrics", {})
+        self.count_label.setToolTip(f"폴더 탐색 {metrics.get('elapsed_seconds', 0):.3f}초 · 파일 내용은 읽지 않고 목록을 조회합니다. 표시 순서 정렬과 내용 검사는 별도 단계입니다.")
         self.size_label.setText(format_size(result.total_size))
         self.reclaim_label.setText("—")
         self.select_duplicates_button.setEnabled(False)
@@ -1591,12 +1754,14 @@ class MainWindow(QMainWindow):
         self.proxy.beginFilterChange()
         self.proxy.query = self.search_input.text().strip().casefold()
         self.proxy.kind = self.type_filter.currentData() or "all"
+        self.proxy.quick = self.quick_filter.currentData() or "all"
+        self.proxy.age_cutoff = time.time() - 365 * 24 * 60 * 60
         self.proxy.endFilterChange(QSortFilterProxyModel.Direction.Rows)
         self.visible_label.setText(f"표시 {self.proxy.rowCount():,} / 전체 {len(self.model.entries):,}개")
         self._refresh_action_hint()
 
     def selected_paths(self) -> list[str]:
-        return [entry.path for entry in self.model.entries if entry.path in self.model.checked]
+        return sorted(self.model.checked, key=self.model.path_rows.__getitem__)
 
     def select_visible(self):
         self.model.set_checked([self.model.entries[self.proxy.mapToSource(self.proxy.index(row, 0)).row()].path
@@ -1610,14 +1775,13 @@ class MainWindow(QMainWindow):
             return
         paths = self.model.checked
         self.selected_label.setText(f"{len(paths):,}개")
-        self.selected_label.setToolTip(f"선택 용량 {format_size(sum(entry.size for entry in self.model.entries if entry.path in paths))}. 검색으로 숨긴 항목도 선택 상태를 유지합니다.")
+        self.selected_label.setToolTip(f"선택 용량 {format_size(sum(self.model.entries[self.model.path_rows[path]].size for path in paths))}. 검색으로 숨긴 항목도 선택 상태를 유지합니다.")
         if hasattr(self, "match_tree"):
             self.match_tree.blockSignals(True)
-            for i in range(self.match_tree.topLevelItemCount()):
-                group = self.match_tree.topLevelItem(i)
-                for j in range(group.childCount()):
-                    child = group.child(j)
-                    child.setCheckState(0, Qt.CheckState.Checked if child.data(0, Qt.ItemDataRole.UserRole) in paths else Qt.CheckState.Unchecked)
+            for path in paths.symmetric_difference(self._last_tree_checked):
+                for child in self._match_items.get(path, ()):
+                    child.setCheckState(0, Qt.CheckState.Checked if path in paths else Qt.CheckState.Unchecked)
+            self._last_tree_checked = set(paths)
             self.match_tree.blockSignals(False)
         self._refresh_action_hint()
 
@@ -1651,13 +1815,16 @@ class MainWindow(QMainWindow):
             groups = find_similar(files, cancel=worker.cancel_event, progress=worker.report, progress_detail=worker.report_detail, cache=self._analysis_cache,
                                   methods=tuple(options["methods"]),
                                   name_threshold=options["name_threshold"], text_threshold=options["text_threshold"],
-                                  image_threshold=options["image_threshold"], report=report)
+                                  image_threshold=options["image_threshold"], report=report,
+                                  search_mode=options["search_mode"], max_candidates_per_file=options["max_candidates_per_file"])
             return groups, worker.cancel_event.is_set(), report
         self._start_task("선택한 이름 · 텍스트 · 이미지 기준으로 검토 후보를 찾고 있습니다…", task,
                          lambda result: self._load_groups(result[0], "similar", result[2]) if not result[1] else None,
                          cancellable=True)
 
     def _load_groups(self, groups: list[MatchGroup], kind: str, report: dict | None = None):
+        self._fast_removal_completed = False
+        self.keep_first_hint.setText("클릭하면 전체 중복 그룹의 첫 파일·보호 파일을 남기고 나머지를 delete_files로 이동합니다. 추가 전체 검사 없이 실행 · 복원 가능")
         self.groups = groups
         self.match_kind = kind
         self.keep_first_delete_button.setEnabled(kind == "duplicate" and bool(groups) and self.scan_complete)
@@ -1693,6 +1860,8 @@ class MainWindow(QMainWindow):
         notices = [self._update_diagnostic_notice] if self._update_diagnostic_notice else []
         if self.scan_result and self.scan_result.warnings:
             notices.append(f"폴더 분석 주의 {len(self.scan_result.warnings):,}건")
+        if self.match_report.get("effective_search_mode") == "indexed":
+            notices.append("빠른 후보 검색 결과입니다. 모든 파일을 살펴보되 모든 쌍을 비교하지 않아 일부 유사 파일을 놓칠 수 있습니다. 검사 설정에서 전체 쌍 비교를 선택할 수 있습니다.")
         if self.match_report.get("limit_reached"):
             notices.append(f"유사 비교 한도 {self.match_report.get('max_pairs', 25000):,}쌍에 도달했습니다. 결과는 일부 범위이며 폴더·크기를 좁혀 다시 검사하세요.")
         if self.match_report.get("skipped_count"):
@@ -1712,7 +1881,7 @@ class MainWindow(QMainWindow):
             return
         filter_kind = self.match_filter.currentData() or "all"
         self.match_tree.blockSignals(True)
-        self.match_tree.clear()
+        self._clear_match_tree()
         displayed = 0
         for index, group in enumerate(self.groups):
             evidence = getattr(group, "evidence", {}) or {}
@@ -1748,7 +1917,9 @@ class MainWindow(QMainWindow):
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 item.setCheckState(0, Qt.CheckState.Checked if path in self.model.checked else Qt.CheckState.Unchecked)
                 parent.addChild(item)
+                self._match_items.setdefault(path, []).append(item)
             parent.setExpanded(displayed <= 6)
+        self._last_tree_checked = set(self.model.checked)
         self.match_tree.blockSignals(False)
         self.match_tree.setToolTip(f"표시 {displayed:,} / 전체 {len(self.groups):,}그룹. 근거 필터는 표시만 바꾸며 보존 규칙은 전체 중복 그룹에 적용됩니다.")
         self._refresh_guidance()
@@ -1987,6 +2158,8 @@ class MainWindow(QMainWindow):
             lambda plan: self._show_preview(plan, require_confirmation=True))
 
     def keep_first_delete(self):
+        if self._fast_removal_completed or self._is_busy:
+            return
         if not self._require_scan():
             return
         if self.match_kind != "duplicate" or not self.groups:
@@ -1994,13 +2167,51 @@ class MainWindow(QMainWindow):
             return
         scan = self.scan_result
         groups = list(self.groups)
-        protected = tuple(self.analysis_options["protected_folders"])
+        protected = list(self.analysis_options["protected_folders"])
+        def task(worker):
+            from .rules import build_existing_duplicate_plan
+            plan = build_existing_duplicate_plan(scan, groups, protected_folders=protected,
+                                                 progress_detail=worker.report_detail)
+            if not plan["items"]:
+                return {"status": "unchanged", "items": [], "warnings": plan.get("warnings", [])}
+            return execute_plan(plan, progress_detail=worker.report_detail)
         self._start_task(
-            "첫 파일과 보호 파일을 남기는 삭제 계획을 검증하고 있습니다…",
-            lambda worker: build_duplicate_plan(
-                scan, groups, retention_rule="first", preserve_first=True,
-                protected_folders=protected, progress_detail=worker.report_detail),
-            lambda plan: self._show_preview(plan, require_confirmation=True, first_only=True))
+            "현재 중복 결과에서 첫 파일을 남기고 나머지를 안전 보관하고 있습니다…",
+            task, self._keep_first_done, failure=self._keep_first_failed)
+
+    def _keep_first_failed(self, error):
+        self.scan_complete = False
+        self.warning_label.setText("검사 이후 파일 상태가 달라졌거나 현재 결과를 사용할 수 없어 정리를 중단했습니다. 파일을 다시 분석해 주세요.")
+        self.warning_label.setToolTip(str(error))
+        self.warning_label.show()
+        self._refresh_guidance()
+
+    def _keep_first_done(self, result):
+        removed = {item["source"] for item in result.get("items", []) if item.get("state") == "completed" or item.get("source_removed") is True}
+        kept_groups = [MatchGroup(group.kind, [path for path in group.paths if path not in removed],
+                                  group.reason, group.score, group.evidence)
+                       for group in self.groups]
+        previous_report = dict(self.match_report)
+        if self.scan_result is not None:
+            # Use the completed operation receipt instead of traversing the
+            # folder or running the duplicate detector again.
+            self.scan_result.files = [entry for entry in self.scan_result.files if entry.path not in removed]
+            self.load_scan_result(self.scan_result)
+            self._load_groups([group for group in kept_groups if group.paths], "duplicate", previous_report)
+        self._analysis_cache.clear()
+        self._fast_removal_completed = True
+        success = result.get("status") in {"completed", "unchanged"}
+        if not success:
+            self.scan_complete = False
+            self.warning_label.setText("일부 파일은 변경·충돌 등의 이유로 처리하지 않았습니다. 실행 로그와 작업 기록을 확인하세요. 다음 정리는 다시 분석한 뒤 진행할 수 있습니다.")
+            self.warning_label.show()
+        self.reclaim_label.setText("—")
+        self.match_label.setText(f"정리 결과 · {len(removed):,}개 delete_files로 이동 · 첫 파일·보호 파일 유지")
+        self.match_explanation.setText("현재 검사 결과로 실행했으며 전체 재검사를 하지 않았습니다. 삭제 파일은 delete_files에 보관하고 작업 기록에서 복원할 수 있습니다.")
+        self.status_label.setText(f"중복 정리 {'완료' if success else '일부 처리'} · {len(removed):,}개 delete_files로 이동 · 전체 재검사 없이 결과를 갱신했습니다.")
+        self.retention_rule.setEnabled(False)
+        self.retention_button.setEnabled(False)
+        self._refresh_guidance()
 
     def classify_duplicates(self):
         if not self._require_scan():
@@ -2067,7 +2278,7 @@ class MainWindow(QMainWindow):
         text = f"총 {len(items):,}개 · {format_size(sum(item.get('size', 0) for item in items))}"
         mode = plan.get("mode")
         if mode in {"quarantine", "duplicate_auto"}:
-            text += "\n실행 결과: 원래 위치에서 파일을 옮겨 안전 보관합니다. 작업 기록에서 복원할 수 있습니다."
+            text += "\n실행 결과: 삭제 파일을 delete_files로 옮깁니다. 작업 기록에서 원래 위치로 복원할 수 있습니다."
         elif all(item.get("action") == "copy" for item in items):
             text += "\n실행 결과: 원본은 그대로 남기고 대상 폴더에 사본을 만듭니다."
         else:
@@ -2287,14 +2498,79 @@ class MainWindow(QMainWindow):
                 lambda worker: undo_operation(root, operation_id, progress_detail=worker.report_detail),
                 self._operation_done))
 
+        def request_compact(operation_id: str):
+            dialog.accept()
+            def start():
+                from .operations import compaction_preview
+                self._start_task("복원용 보관 사본의 최적화 범위를 확인하고 있습니다…",
+                                 lambda worker: compaction_preview(root, operation_id, progress_detail=worker.report_detail),
+                                 self._show_compaction_preview)
+            QTimer.singleShot(0, start)
+
         def closed(_result):
             if self._history_dialog is dialog:
                 self._history_dialog = None
             dialog.deleteLater()
 
         dialog.undo_requested.connect(request_undo)
+        dialog.compact_requested.connect(request_compact)
         dialog.finished.connect(closed)
         dialog.open()
+
+    def _show_compaction_preview(self, plan):
+        if not plan.get("candidate_count"):
+            self.status_label.setText("이 작업에는 최적화할 비공개 보관 사본이 없습니다.")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("복원 데이터 용량 최적화 · 실행 전 확인")
+        dialog.resize(860, 580)
+        layout = QVBoxLayout(dialog)
+        intro = QLabel(f"비공개 보관 사본 {plan['candidate_count']:,}개 · 논리 용량 {format_size(plan['raw_bytes'])}\n"
+                       f"내용이 같은 중복분 {format_size(plan['duplicate_bytes'])} · 실제 압축률은 실행 후 확인할 수 있습니다.\n\n"
+                       "1. 같은 데이터 조각은 한 번만 보관하고, 압축이 유리한 조각은 무손실 압축합니다.\n"
+                       "2. 전체 내용을 다시 복원해 검증하고 복원 기록을 저장한 뒤, 중복된 비공개 사본만 줄입니다.\n"
+                       "3. 실제 문서와 이동 대상 폴더의 파일은 바꾸지 않습니다. 오류·변경·압축 이득 부족이면 기존 보관 방식을 유지합니다.\n\n"
+                       "복원 데이터는 앱의 보관함에 남습니다. 메타데이터만으로 원문을 재생성하거나 다른 위치의 원본에 의존하지 않습니다.")
+        intro.setWordWrap(True)
+        intro.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(intro)
+        paths = QPlainTextEdit()
+        paths.setReadOnly(True)
+        paths.setMaximumHeight(110)
+        candidates = plan.get("candidates", [])
+        paths.setPlainText("최적화 대상 보관 경로\n" + "\n".join(str(item.get("path", "")) for item in candidates[:100])
+                           + (f"\n나머지 {len(candidates) - 100:,}개 표시 생략" if len(candidates) > 100 else ""))
+        layout.addWidget(paths)
+        if plan.get("warnings"):
+            warning = QLabel("\n".join(map(str, plan["warnings"][:8])))
+            warning.setWordWrap(True)
+            warning.setObjectName("warning")
+            layout.addWidget(warning)
+        layout.addStretch()
+        confirm = QCheckBox("최적화 대상이 앱의 복원용 보관 사본임을 확인했습니다")
+        layout.addWidget(confirm)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Apply | QDialogButtonBox.StandardButton.Cancel)
+        apply = buttons.button(QDialogButtonBox.StandardButton.Apply)
+        apply.setText("검증 후 보관 용량 최적화")
+        apply.setEnabled(False)
+        confirm.toggled.connect(apply.setEnabled)
+        apply.clicked.connect(dialog.accept)
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("취소")
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() == QDialog.DialogCode.Accepted and confirm.isChecked():
+            from .operations import compact_operation
+            self._start_task("복원 데이터를 중복 제거·압축하고 검증하고 있습니다…",
+                             lambda worker: compact_operation(plan["root"], plan["operation_id"], plan=plan,
+                                                              progress_detail=worker.report_detail), self._compaction_done)
+
+    def _compaction_done(self, result):
+        summary = result.get("recovery_compaction", {})
+        self._show_details("복원 데이터 최적화 결과", {
+            "id": result.get("id"), "status": summary.get("status"), "recovery_compaction": summary,
+            "recovery_metadata": result.get("recovery_metadata", {}),
+        })
+        self.status_label.setText(f"복원 데이터 최적화 · 절약량 {format_size(summary.get('saved_bytes', 0))} · 작업 기록에서 복원할 수 있습니다.")
 
     def show_logs(self):
         if self._log_dialog is not None and self._log_dialog.isVisible():

@@ -234,25 +234,26 @@ def test_changed_keeper_blocks_entire_batch_before_any_copy_or_journal(root, cha
     assert not (root / ops.STATE_DIRECTORY).exists()
 
 
-def test_keeper_change_during_copy_leaves_source_and_preserved_target(root, monkeypatch):
+def test_keeper_change_during_atomic_move_returns_selected_source(root, monkeypatch):
     write(root, "first.txt")
     write(root, "second.txt")
     scan = scan_folder(root)
     plan = rules.build_duplicate_plan(scan, find_duplicates(scan.files))
     item = plan["items"][0]
-    original_copy = ops._copy_verified
+    original_move = ops._move_no_replace
 
-    def changed_keeper(*args, **kwargs):
-        result = original_copy(*args, **kwargs)
-        Path(item["duplicate_keeper"]["path"]).unlink()
+    def changed_keeper(source, target):
+        result = original_move(source, target)
+        if target == Path(item["target"]):
+            Path(item["duplicate_keeper"]["path"]).unlink()
         return result
 
-    monkeypatch.setattr(ops, "_copy_verified", changed_keeper)
+    monkeypatch.setattr(ops, "_move_no_replace", changed_keeper)
     result = ops.execute_plan(plan)
     assert result["status"] == "failed"
     assert Path(item["source"]).read_bytes() == b"valuable data"
-    assert Path(item["target"]).read_bytes() == b"valuable data"
-    assert result["items"][0]["state"] == "copy_preserved"
+    assert not Path(item["target"]).exists()
+    assert result["items"][0]["state"] == "failed"
 
 
 def test_similar_or_legacy_unproven_groups_never_auto_quarantine(root):

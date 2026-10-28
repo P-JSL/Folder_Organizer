@@ -28,7 +28,7 @@ def test_guided_duplicate_flow_stops_at_review_until_user_confirms(app, window, 
     monkeypatch.setattr(QDialog, "exec", reject)
     window.next_step_button.click()
     wait(app, window)
-    assert previews and "실행 결과" in previews[0] and "안전 보관" in previews[0]
+    assert previews and "실행 결과" in previews[0] and "delete_files" in previews[0] and "복원" in previews[0]
     assert {path: Path(path).read_bytes() for path in original} == original
     assert not (Path(scan.root) / ".folder-organizer").exists()
 

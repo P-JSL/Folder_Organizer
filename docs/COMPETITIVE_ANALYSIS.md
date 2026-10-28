@@ -1,10 +1,10 @@
 # 상용 프로그램 비교와 중복·유사 판정 설계
 
-조사일: **2026-10-27**. 대상은 개인 폴더에서 원본을 보존하면서 중복 사본과 유사 후보를 검토하는 Windows 앱이다.
+최초 조사일: **2026-10-27**, 추가 공식 자료 확인: **2026-10-28**. 대상은 개인 폴더에서 원본을 보존하면서 중복 사본과 유사 후보를 검토하는 Windows 앱이다.
 
 ## 조사 범위와 근거 수준
 
-이번 조사에서는 Duplicate Cleaner와 JAM Software의 **실제 공식 제품·기능 페이지를 읽었다**. 이전 문서가 공개 배포 매니페스트만으로 설명했던 범위를 보완했다. Beyond Compare는 Microsoft의 공개 WinGet 매니페스트에서 게시자, 독점 라이선스, 구매 링크와 비교 기능을 확인했다. Scooter Software의 공식 사이트와 MacPaw 사이트는 이 환경에서 접속이 차단되어 해당 상세 매뉴얼·유료판별 옵션을 읽었다고 주장하지 않는다.
+최초 조사에서는 Duplicate Cleaner와 JAM Software의 **실제 공식 제품·기능 페이지를 읽었다**. Beyond Compare는 당시 Microsoft의 공개 WinGet 매니페스트에서 게시자, 독점 라이선스, 구매 링크와 비교 기능을 확인했다. **2026-10-28에는 Scooter Software의 공식 기능 비교표·구매 페이지와 MacPaw Gemini 2 공식 제품 페이지에도 접속하여 추가로 읽었다.** 아래에서 최초 조사와 추가 확인을 구분한다. 상세 매뉴얼 전체나 모든 유료판 옵션을 확인했다는 뜻은 아니다.
 
 경쟁 제품을 구매·설치하거나 정확도·속도를 실측하지 않았다. 아래 기능은 공급업체 또는 배포 설명에서 확인한 내용이며 성능 보증이 아니다. 가격 비교가 목적이 아니므로 지역·세금·구독·프로모션에 따라 달라지는 구매 가격은 옮기지 않았다. 경쟁사의 코드·아이콘·화면 자산을 복사하지 않았다.
 
@@ -15,6 +15,46 @@
 | **Duplicate Cleaner Pro 5** | 공식 홈페이지가 Pro의 개인·상업용 영구 라이선스와 5 시리즈 업데이트 포함을 설명한다. Free와 Pro 기능도 구분한다. | 이름·크기·날짜 필터, 날짜·폴더·즐겨찾기 폴더를 사용하는 Selection Assistant, 엄격함을 조절하는 시각 비교, 그룹 이미지를 나란히 보는 브라우저. 이미지의 편집·회전·크기 변경·형식 차이에 대한 유사 탐지를 설명한다. | 정확한 중복의 보존 규칙과 유사 파일의 사람 검토를 분리한다. 선호·보호 폴더와 원본 보존 규칙을 먼저 표시하고, 이미지 크기·날짜와 두 파일의 미리보기를 함께 제공한다. |
 | **TreeSize Personal / Professional** | 공식 Editions 페이지에 Free·Personal·Professional이 나뉘며 유료판의 구매·체험 및 라이선스 모델을 안내한다. | 체크섬 기반 동일 파일 탐지, 이름·위치와 무관한 동일 내용 판별, 파일·폴더 포함/제외, 크기·유형 필터, `Select all but newest`. 공식 중복 안내는 **같은 이름이지만 내용이 다른 파일**도 별도 검색 사례로 설명한다. | 이름 일치와 내용 일치를 같은 배지로 표현하지 않는다. 이름·텍스트·이미지의 근거를 분리하고, 검증된 중복만 최신/오래된 파일 보존 규칙으로 선택한다. 검색 범위와 제외된 항목도 보여준다. |
 | **Beyond Compare 5** | 실제 읽은 WinGet 5.2.6.32774 매니페스트에 `Proprietary`, 공식 구매 URL, Scooter Software 게시자가 명시되어 있다. | 폴더·텍스트·이미지·표를 비교하고 차이를 검토하는 제품이라고 설명한다. | 숫자 하나만 보여주는 대신 두 파일의 경로·용량·날짜·지원되는 내용 차이를 검토하는 비교 화면을 둔다. 전문 표 비교·3-way 병합·양방향 동기화까지 구현했다고 주장하지 않는다. |
+
+## 2026-10-28 추가 조사와 적용
+
+| 공식 자료에서 확인한 동작 | 필요한 이유 | 이번 앱에 적용한 범위 |
+| --- | --- | --- |
+| TreeSize: 폴더별 크기, 파일 종류별 통계, 큰 파일 목록, 수정 시기별 분포와 시각적 비중 | 중복 검사만으로는 어떤 위치와 종류가 많은 용량을 차지하는지 알기 어렵다. | **용량·정리 요약**에서 폴더·종류·큰 파일·수정 시기를 보여준다. 막대와 숫자를 함께 표시하고, 고른 분류를 기존 파일 목록에서 체크한 뒤 정리 미리보기로 연결한다. |
+| Duplicate Cleaner: 종류·크기·날짜 조건과 Selection Assistant | 사용자가 검색 범위를 좁히고 남길 파일을 먼저 결정할 수 있어야 한다. | 기존 보존 규칙·보호 폴더와 함께 큰 파일·오래 수정되지 않은 파일·빈 파일을 검토하는 흐름을 연결한다. 빈 파일과 오래된 파일을 자동으로 불필요하다고 판정하지 않는다. |
+| Beyond Compare: 저장한 비교 세션, 상황별 도움말, 차이 표시 필터, 저장 시 자동 백업 | 반복 작업의 진입을 줄이고 화면에서 다음 행동의 결과를 이해하기 쉽게 한다. | 최근 폴더로 다시 들어가는 경로와 현재 상태의 다음 단계·도움말을 연결한다. 이전 결과를 최신 검사로 가장하지 않고 다시 분석한다. 기존 변경 전 미리보기와 보호 사본을 유지한다. |
+| Gemini 2: 검토 후 직접 선택, 차이를 보고 유사 파일을 정리, 휴지통 복구 또는 다른 폴더로 이동 | 실수 후 되돌릴 수 있어야 하며 유사 후보의 선택을 충분히 설명해야 한다. | 유사 후보의 직접 비교와 명확한 체크·미리보기·안전 보관·복원 흐름을 유지한다. Gemini의 학습 알고리즘을 재현하거나 사진·음악의 의미를 이해한다고 주장하지 않는다. |
+
+요약은 **분석에 포함된 논리적 파일 크기의 합계**다. 실제 디스크 점유 공간·남은 공간·정리 후 확보량과 다를 수 있다. 하드링크로 연결된 여러 경로도 각각 목록에 포함되므로 용량이 중복 집계될 수 있다. 수정 시기는 마지막 열람 시기와 다르며, 0바이트 파일도 다른 프로그램의 설정·표시용으로 필요할 수 있다.
+
+TreeSize의 MFT·NTFS·다중 스레드 기능을 확인했지만 이 앱이 같은 저수준 파일 시스템 접근이나 같은 속도를 제공한다고 주장하지 않는다. 이미 분석한 메타데이터를 한 번 순회해 요약하고, 고정된 개수의 큰 파일 목록만 유지하여 불필요한 전체 정렬과 파일 재읽기를 줄이는 방식으로 적용한다. 모든 파일의 완전한 검사는 파일 수와 읽어야 할 바이트 수의 영향을 받는다.
+
+Beyond Compare 기능 비교표의 **“Save filesystem snapshots without content”**는 비교용 파일 목록을 저장하는 기능이다. 내용 없는 메타데이터로 유실된 파일 바이트를 복구할 수 있다는 근거가 아니다. 이 앱의 압축 복원 메타데이터 역시 경로·상태·검증 정보이며, 실제 복원에는 보관된 원본·검증 사본이 필요하다.
+
+## 복원 데이터 저장 기법
+
+추가 확인일: **2026-10-28**. 실제 복원에 필요한 **파일 바이트**와 원래 위치·순서·검증 값을 설명하는 **메타데이터**는 구분한다. 메타데이터만 작게 저장해도 유실된 바이트를 새로 만들어 낼 수는 없다. 저장 공간을 줄이려면 복원할 바이트를 무손실 압축하거나 이미 보관한 같은 바이트를 재사용해야 한다. JPEG·ZIP처럼 이미 압축된 내용이나 무작위에 가까운 내용은 추가로 압축해도 이득이 작거나 없을 수 있다.
+
+이번 설계에서는 공식 Borg·restic 문서의 **내용 기반 재사용 후 압축** 원칙을 참고하고, 구현·검증 비용과 복원 속도를 제한할 수 있는 고정 크기 청크를 사용한다. Borg·restic 저장 형식이나 암호화 프로토콜과 호환된다는 뜻은 아니다.
+
+| 기법 | 저장 공간과 복원에 미치는 영향 | 속도·의존성·지원 경계 |
+| --- | --- | --- |
+| 파일별 무손실 압축 | 각 보관본을 별도로 압축하므로 복원 경로가 단순하지만, 다른 파일·작업에 포함된 동일 내용이 반복 저장될 수 있다. | 이번 청크 방식의 이득이 없거나 처리 한도를 넘으면 기존 검증 보관본을 유지한다. |
+| **고정 크기 청크 + 내용 주소 + 선택적 압축** | 파일을 최대 **1 MiB** 청크로 나누고 SHA-256으로 식별한다. 같은 선택 폴더의 보관소에서 파일·작업 간 동일 청크를 재사용한다. 새 청크는 zlib 레벨 1 결과와 원시 바이트 중 더 작은 쪽을 저장한다. 메타데이터가 청크의 순서를 설명하고, 복원 시 실제 청크를 다시 결합·검증한다. | 이번 앱의 [복원 데이터 구현](../folder_organizer/recovery_payload.py). 고정 블록을 순서대로 읽어 메모리와 압축 비용을 제한한다. 파일 앞부분 삽입으로 블록 경계가 밀리면 CDC보다 재사용률이 낮을 수 있다. |
+| 내용 기반 분할(CDC) | 내용에 따라 경계를 잡아 중간 삽입·삭제 뒤에도 바뀌지 않은 구간을 재사용하기 쉽다. Borg는 Buzhash, restic은 Rabin 기반 분할을 설명한다. | 두 제품 모두 검증된 구현을 제공하지만, 이 앱에는 해당 분할기를 구현하지 않았다. 롤링 해시·경계 규칙·형식·복원 검증을 추가해야 하므로 현재 고정 청크와 같다고 표시하지 않는다. CDC도 모든 자료에서 가장 작은 결과를 보장하지 않는다. |
+| 기준본 + 차이(delta) | 비슷한 두 자료의 차이만 저장하면 작아질 수 있다. Git pack 형식은 기준 객체와 복원 명령을 함께 참조한다. | 기준본과 경우에 따라 기준본의 기준본까지 필요하다. 체인 복원·보존·손상 처리가 복잡해지므로 이번 앱에는 적용하지 않았다. 유사도 점수나 제목 유사도를 복구 차이 데이터로 사용하지 않는다. |
+| 더 높은 압축 강도·다른 코덱 | zlib 레벨 9, LZMA, zstd 등은 자료와 설정에 따라 압축률·CPU·메모리·처리 시간이 달라진다. 코덱만 바꾼다고 중복 저장 문제가 해결되는 것은 아니다. | 현재는 추가 패키지 없이 사용할 수 있는 표준 라이브러리 zlib 레벨 1을 선택한다. CPython 공식 문서는 레벨 1을 가장 빠른 설정, 레벨 9를 느리지만 더 높은 압축을 노리는 설정으로 설명한다. 이 앱이 코덱 전부를 비교·최적 선택했다고 주장하지 않는다. |
+
+복원용 [압축 메타데이터](../folder_organizer/recovery_metadata.py)는 경로·상태·서명을 작게 저장하는 별도 계층이다. 실제 내용은 위 청크 또는 기존 보관본에 남는다. 새 데이터와 복원 설명을 검증하고 기록을 확정하기 전에는 기존 보관본을 제거하지 않는다. 공간 이득이 없거나 시간·크기 한도에 걸리면 기존 방식으로 유지한다.
+
+**모든 파일에 대한 전역 최소 용량은 보장하지 않는다.** 청크 설명·서명·파일 시스템 할당 단위·공유 객체 보존·작업 중 임시 공간도 비용이다. 공유 중인 청크를 잘못 지우지 않도록 자동 정리는 보수적으로 다뤄야 한다. 압축률과 재사용률은 파일 내용·블록 경계·과거 보관 이력에 따라 달라지므로 앱의 실제 측정값과 적용·유지 결과를 기준으로 판단한다. 이 보관소 자체를 잃으면 메타데이터만으로 재구성할 수 없으며, 물리적 디스크 손상까지 보호하는 별도 외부 백업을 제공한다고 주장하지 않는다.
+
+### 복원 저장 기법에서 실제로 읽은 공식 자료
+
+- **[Borg 1.4 공식 저장 구조 문서](https://github.com/borgbackup/borg/blob/1.4-maint/docs/internals/data-structures.rst)** — 2026-10-28 읽음. 고정 블록·CDC, 내용의 강한 해시/MAC를 이용한 중복 제거, 중복 제거 후 압축을 확인했다. 핵심 원문: “a simple, low cpu overhead, fixed blocksize chunker”, “Compression is applied after deduplication”. 이는 해당 제품의 설명이며 이 앱과의 속도 실측 결과가 아니다.
+- **[restic 공식 저장 형식 문서](https://github.com/restic/restic/blob/master/doc/design.rst)** — 같은 날 읽음. SHA-256 내용 주소, 한 번 쓰고 변경하지 않는 객체와 원자적 쓰기, Rabin 기반 CDC, 압축·비압축 blob의 혼용을 확인했다. 핵심 원문: “All files in a repository are only written once and never modified afterwards”, “Compressed and non-compressed blobs of the same type may be mixed in a pack file”. restic의 암호화·저장 형식을 이 앱에 구현했다는 뜻은 아니다.
+- **[CPython 3.12 공식 zlib 문서 원문](https://github.com/python/cpython/blob/3.12/Doc/library/zlib.rst)** — 같은 날 읽음. 압축 레벨과 속도·압축률의 절충을 확인했다. 핵심 원문: “1 (Z_BEST_SPEED) is fastest and produces the least compression”, “9 (Z_BEST_COMPRESSION) is slowest and produces the most”. 더 작을 때만 압축 결과를 쓰는 선택은 이 앱의 정책이다.
+- **[Git 공식 pack 형식 문서](https://github.com/git/git/blob/master/Documentation/gitformat-pack.adoc)** — 같은 날 읽음. delta가 기준 객체와 복원 명령에 의존하고 기준 객체도 delta일 수 있음을 확인했다. 핵심 원문: “another object (called 'base object') to reconstruct the object”. 이 앱에 delta·Git pack 저장을 구현했다는 근거로 사용하지 않는다.
 
 공식 TreeSize 기능 페이지에는 MD5 또는 SHA-256 체크섬과 NTFS 하드링크를 이용한 중복 제거도 설명되어 있다. Folder Organizer는 SHA-256 뒤에 실제 바이트 비교를 수행하고, 기존 하드링크 별칭은 중복 사본 수에서 제외한다. **자동 하드링크 변환은 적용하지 않는다.** 한 경로의 편집이 다른 경로에도 영향을 줄 수 있는 동작을 일반 파일 정리와 섞지 않기 위해서다.
 
@@ -44,6 +84,7 @@
 | 작업 단계 | 반영 내용 | 비교 제품에서 참고한 점과 지원 경계 |
 | --- | --- | --- |
 | 폴더 선택·목록 | 크기·날짜·종류, 검색·정렬, 실제 검사 범위의 제외 패턴·크기 조건 | TreeSize의 범위 필터와 정보 중심 검토. 화면 필터와 실제 검사 범위를 구분한다. |
+| 용량·정리 요약 | 폴더·종류별 크기·비중, 큰 파일, 수정 시기·빈 파일 검토와 목록 체크 연결 | TreeSize의 정보 중심 용량 분석을 참고했다. 파일 크기 합계이며 실제 디스크 사용량이나 삭제 안전성을 뜻하지 않는다. |
 | 완전 중복 검사 | 크기 → SHA-256 → 실제 바이트, 하드링크 별칭 제외, 근거 표시 | 체크섬 기반 판정에서 이름·내용 구분을 강화했다. 앱의 필요성·경로 의존성까지 판단하지 않는다. |
 | 유사 후보 탐지 | 이름·텍스트·이미지별 설정과 점수, 완전 중복 쌍 분리, 한계 표시 | Duplicate Cleaner의 엄격함 조절을 참고하되 모든 회전·크롭·영상·음악 비교까지 제공하지 않는다. |
 | 두 파일 검토 | 나란한 메타데이터·전체 해시, 지원 텍스트 차이·이미지 미리보기 | Duplicate Cleaner의 이미지 브라우저와 Beyond Compare의 차이 검토 접근을 참고했다. 모든 문서 형식의 의미 비교는 아니다. |
@@ -60,8 +101,12 @@
 - **[TreeSize 공식 기능 목록](https://www.jam-software.com/treesize/features.shtml)** — 같은 날 읽음. MD5/SHA-256, NTFS 하드링크, 포함/제외와 파일 검색을 확인했다. 핵심 원문: “optionally with MD5 or SHA256 checksums.”
 - **[TreeSize 공식 에디션 비교](https://www.jam-software.com/treesize/editions.shtml)** — 같은 날 읽음. 체크섬 기반 중복 탐지와 유료판별 기능을 확인했다. 핵심 원문: “identical files regardless of name or location.”
 - **[TreeSize 공식 중복 파일 안내](https://www.jam-software.com/treesize/remove-duplicates.shtml)** — 같은 날 읽음. 이름과 내용의 차이, 최신 파일을 남기는 선택, 파일 크기·유형 필터를 확인했다. 핵심 원문: “same name but different content”, “Select all but newest”.
-- **[Beyond Compare 5 공개 배포 매니페스트](https://github.com/microsoft/winget-pkgs/blob/master/manifests/s/ScooterSoftware/BeyondCompare/5/5.2.6.32774/ScooterSoftware.BeyondCompare.5.locale.en-US.yaml)** — 같은 날 읽음. 독점 라이선스, 구매 링크, 비교 형식을 확인했다. [공식 구매 페이지](https://www.scootersoftware.com/shop)는 매니페스트에 기재된 링크이며 이번 환경에서는 직접 읽지 못했다.
+- **[Beyond Compare 5 공개 배포 매니페스트](https://github.com/microsoft/winget-pkgs/blob/master/manifests/s/ScooterSoftware/BeyondCompare/5/5.2.6.32774/ScooterSoftware.BeyondCompare.5.locale.en-US.yaml)** — 같은 날 읽음. 독점 라이선스, 구매 링크, 비교 형식을 확인했다. 공식 구매 페이지는 최초 조사일에는 읽지 못했으며 추가 확인은 아래에 기재했다.
+- **[TreeSize 공식 기능 목록](https://www.jam-software.com/treesize/features.shtml)** — 2026-10-28 다시 읽음. 폴더·종류별 통계, 큰 파일과 파일 나이 분포를 확인했다. 핵심 원문: “See a list of the largest files”, “Distribution of occupied disk space by file age.”
+- **[Beyond Compare 공식 기능 비교표](https://www.scootersoftware.com/kb/feature_compare)** — 2026-10-28 읽음. 저장한 세션, 상황별 도움말, 표시 필터, 자동 백업과 내용 없는 비교용 스냅샷을 확인했다. 핵심 원문: “Save comparisons as sessions to easily load them later”, “Automatic backups when saving”, “Save filesystem snapshots without content”.
+- **[Beyond Compare 공식 구매 안내](https://www.scootersoftware.com/shop)** — 2026-10-28 읽음. Standard·Pro 에디션과 라이선스 필요성을 확인했다. 가격을 복제하거나 경쟁 제품을 구매·실측했다는 뜻은 아니다.
+- **[Gemini 2 공식 제품 안내](https://macpaw.com/gemini)** — 2026-10-28 읽음. 직접 선택·차이 검토, Smart Select, 휴지통 복구·다른 폴더 이동을 확인했다. 핵심 원문: “hand-pick the files to erase”, “bring them back in a click”, “stash them in a faraway folder”.
 
 ## 읽지 못한 자료와 적용하지 않은 범위
 
-Duplicate Cleaner의 상세 매뉴얼·전체 에디션 표는 `www.digitalvolcano.co.uk`, Beyond Compare의 상세 도움말은 `www.scootersoftware.com`, Gemini 2는 `macpaw.com`의 접근 제한으로 확인하지 못했다. 해당 기능·가격을 추측해 비교표에 넣지 않았다. 동영상 프레임·음악 음향 지문·문서 의미 인식·디스크 삭제 복구·일정 기반 무인 삭제·자동 하드링크 변환은 이번 중복/유사 기능을 설명하는 근거로 삼지 않는다.
+최초 조사일에는 Scooter Software와 MacPaw의 접근 제한이 있었으나 2026-10-28 위 공식 공개 페이지는 읽을 수 있었다. Duplicate Cleaner의 상세 매뉴얼·전체 에디션 표와 각 제품의 비공개 알고리즘·전체 매뉴얼·제품 실측은 여전히 조사하지 않았다. 해당 내용을 추측해 비교표에 넣지 않았다. 동영상 프레임·음악 음향 지문·문서 의미 인식·디스크 삭제 복구·일정 기반 무인 삭제·자동 하드링크 변환은 이번 구현 범위에 넣지 않는다.

@@ -49,7 +49,8 @@ def test_real_journal_selection_emits_only_id_and_preserves_backend_restore(app,
     assert dialog.selected_operation_id() == journal["id"]
     assert dialog.undo_button.isEnabled()
     assert "계약서.txt" in dialog.details.toPlainText()
-    assert "보호 사본" in dialog.details.toPlainText()
+    assert "delete_files" in dialog.details.toPlainText()
+    assert "original_backup" not in journal["items"][0]
     dialog.undo_button.click()
     assert requested == [journal["id"]]
     # Viewing/requesting a restore never performs filesystem work itself.

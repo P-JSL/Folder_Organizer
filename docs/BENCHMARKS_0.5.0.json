@@ -1,0 +1,1038 @@
+{
+  "recorded_date": "2026-10-28",
+  "baseline": "585d9f1ed0a046eda58561f1e0f47a1e01ab9a08",
+  "scope": "Synthetic local files; 3-run medians; module source digests included; not real-world or whole-application speed guarantees",
+  "scaling": {
+    "suite": "scaling",
+    "python": "3.12.14",
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+    "logical_cpus": 5,
+    "fixture": "unique random names plus one normalized-name pair late in path order",
+    "scope": "same local files per version; creation excluded; page cache may be warm; GUI display sorting excluded; byte counters are requested reads, not physical disk traffic",
+    "results": [
+      {
+        "revision": "585d9f1ed0a046eda58561f1e0f47a1e01ab9a08",
+        "files": 1002,
+        "repeats": 3,
+        "source_sha256": {
+          "scanner": "db62031c30556a3627e0115568c3058083b29bac88250c0b63336b28b92e1c4b",
+          "matching": "4c290c82840ff14810658bc4240d5c3f0409d8636f2f881fd8bb511d342f5459"
+        },
+        "inventory_sorted_in_core": true,
+        "median_inventory_seconds": 0.036565,
+        "median_analysis_seconds": 0.751997,
+        "median_analysis_cpu_seconds": 0.751435,
+        "runs": [
+          {
+            "scan_metrics": {},
+            "scan_progress_callbacks": 1004,
+            "requested_read_bytes": 79115,
+            "snapshot_opens": 1998,
+            "late_pair_found": false,
+            "result_pairs": 0,
+            "comparison": {
+              "files_considered": 1002,
+              "compared_pairs": 25000,
+              "max_pairs": 25000,
+              "limit_reached": true
+            }
+          },
+          {
+            "scan_metrics": {},
+            "scan_progress_callbacks": 1004,
+            "requested_read_bytes": 79115,
+            "snapshot_opens": 1998,
+            "late_pair_found": false,
+            "result_pairs": 0,
+            "comparison": {
+              "files_considered": 1002,
+              "compared_pairs": 25000,
+              "max_pairs": 25000,
+              "limit_reached": true
+            }
+          },
+          {
+            "scan_metrics": {},
+            "scan_progress_callbacks": 1004,
+            "requested_read_bytes": 79115,
+            "snapshot_opens": 1998,
+            "late_pair_found": false,
+            "result_pairs": 0,
+            "comparison": {
+              "files_considered": 1002,
+              "compared_pairs": 25000,
+              "max_pairs": 25000,
+              "limit_reached": true
+            }
+          }
+        ]
+      },
+      {
+        "revision": "working-tree",
+        "files": 1002,
+        "repeats": 3,
+        "source_sha256": {
+          "scanner": "88efbac16905edb092a2ceee0d8c26c03d5b763361c5cd761efb1136d13a244c",
+          "matching": "3bd9337b65e8f61f6b94a525f59034858de97517e840c5e30ed3a6eacd637ce7"
+        },
+        "inventory_sorted_in_core": false,
+        "median_inventory_seconds": 0.035807,
+        "median_analysis_seconds": 0.160576,
+        "median_analysis_cpu_seconds": 0.160429,
+        "runs": [
+          {
+            "scan_metrics": {
+              "visited_entries": 1002,
+              "metadata_reads": 1004,
+              "directories": 1,
+              "progress_events": 21,
+              "sorted_results": false,
+              "elapsed_seconds": 0.035841897002683254
+            },
+            "scan_progress_callbacks": 21,
+            "requested_read_bytes": 79115,
+            "snapshot_opens": 2000,
+            "late_pair_found": true,
+            "result_pairs": 1,
+            "comparison": {
+              "files_considered": 1002,
+              "compared_pairs": 2260,
+              "max_pairs": 25000,
+              "limit_reached": false,
+              "effective_search_mode": "indexed",
+              "exhaustive": false,
+              "potential_pairs": 501501,
+              "candidate_files_visited": 1002,
+              "candidate_lookups": 9018,
+              "index_postings_scanned": 2285,
+              "index_keys": 7123,
+              "index_keys_retained_peak": 7123,
+              "index_evictions": 0,
+              "index_key_limit": 65536,
+              "index_posting_limit": 32,
+              "candidate_pairs": 2260,
+              "candidate_pairs_selected": 2260,
+              "candidate_limit_reached": false
+            }
+          },
+          {
+            "scan_metrics": {
+              "visited_entries": 1002,
+              "metadata_reads": 1004,
+              "directories": 1,
+              "progress_events": 21,
+              "sorted_results": false,
+              "elapsed_seconds": 0.03569267900093109
+            },
+            "scan_progress_callbacks": 21,
+            "requested_read_bytes": 79115,
+            "snapshot_opens": 2000,
+            "late_pair_found": true,
+            "result_pairs": 1,
+            "comparison": {
+              "files_considered": 1002,
+              "compared_pairs": 2260,
+              "max_pairs": 25000,
+              "limit_reached": false,
+              "effective_search_mode": "indexed",
+              "exhaustive": false,
+              "potential_pairs": 501501,
+              "candidate_files_visited": 1002,
+              "candidate_lookups": 9018,
+              "index_postings_scanned": 2285,
+              "index_keys": 7123,
+              "index_keys_retained_peak": 7123,
+              "index_evictions": 0,
+              "index_key_limit": 65536,
+              "index_posting_limit": 32,
+              "candidate_pairs": 2260,
+              "candidate_pairs_selected": 2260,
+              "candidate_limit_reached": false
+            }
+          },
+          {
+            "scan_metrics": {
+              "visited_entries": 1002,
+              "metadata_reads": 1004,
+              "directories": 1,
+              "progress_events": 21,
+              "sorted_results": false,
+              "elapsed_seconds": 0.035045410000748234
+            },
+            "scan_progress_callbacks": 21,
+            "requested_read_bytes": 79115,
+            "snapshot_opens": 2000,
+            "late_pair_found": true,
+            "result_pairs": 1,
+            "comparison": {
+              "files_considered": 1002,
+              "compared_pairs": 2260,
+              "max_pairs": 25000,
+              "limit_reached": false,
+              "effective_search_mode": "indexed",
+              "exhaustive": false,
+              "potential_pairs": 501501,
+              "candidate_files_visited": 1002,
+              "candidate_lookups": 9018,
+              "index_postings_scanned": 2285,
+              "index_keys": 7123,
+              "index_keys_retained_peak": 7123,
+              "index_evictions": 0,
+              "index_key_limit": 65536,
+              "index_posting_limit": 32,
+              "candidate_pairs": 2260,
+              "candidate_pairs_selected": 2260,
+              "candidate_limit_reached": false
+            }
+          }
+        ]
+      },
+      {
+        "revision": "585d9f1ed0a046eda58561f1e0f47a1e01ab9a08",
+        "files": 2002,
+        "repeats": 3,
+        "source_sha256": {
+          "scanner": "db62031c30556a3627e0115568c3058083b29bac88250c0b63336b28b92e1c4b",
+          "matching": "4c290c82840ff14810658bc4240d5c3f0409d8636f2f881fd8bb511d342f5459"
+        },
+        "inventory_sorted_in_core": true,
+        "median_inventory_seconds": 0.070888,
+        "median_analysis_seconds": 0.811686,
+        "median_analysis_cpu_seconds": 0.811074,
+        "runs": [
+          {
+            "scan_metrics": {},
+            "scan_progress_callbacks": 2004,
+            "requested_read_bytes": 163199,
+            "snapshot_opens": 3999,
+            "late_pair_found": false,
+            "result_pairs": 0,
+            "comparison": {
+              "files_considered": 2002,
+              "compared_pairs": 25000,
+              "max_pairs": 25000,
+              "limit_reached": true
+            }
+          },
+          {
+            "scan_metrics": {},
+            "scan_progress_callbacks": 2004,
+            "requested_read_bytes": 163199,
+            "snapshot_opens": 3999,
+            "late_pair_found": false,
+            "result_pairs": 0,
+            "comparison": {
+              "files_considered": 2002,
+              "compared_pairs": 25000,
+              "max_pairs": 25000,
+              "limit_reached": true
+            }
+          },
+          {
+            "scan_metrics": {},
+            "scan_progress_callbacks": 2004,
+            "requested_read_bytes": 163199,
+            "snapshot_opens": 3999,
+            "late_pair_found": false,
+            "result_pairs": 0,
+            "comparison": {
+              "files_considered": 2002,
+              "compared_pairs": 25000,
+              "max_pairs": 25000,
+              "limit_reached": true
+            }
+          }
+        ]
+      },
+      {
+        "revision": "working-tree",
+        "files": 2002,
+        "repeats": 3,
+        "source_sha256": {
+          "scanner": "88efbac16905edb092a2ceee0d8c26c03d5b763361c5cd761efb1136d13a244c",
+          "matching": "3bd9337b65e8f61f6b94a525f59034858de97517e840c5e30ed3a6eacd637ce7"
+        },
+        "inventory_sorted_in_core": false,
+        "median_inventory_seconds": 0.071058,
+        "median_analysis_seconds": 0.460614,
+        "median_analysis_cpu_seconds": 0.460426,
+        "runs": [
+          {
+            "scan_metrics": {
+              "visited_entries": 2002,
+              "metadata_reads": 2004,
+              "directories": 1,
+              "progress_events": 31,
+              "sorted_results": false,
+              "elapsed_seconds": 0.07057879199783201
+            },
+            "scan_progress_callbacks": 31,
+            "requested_read_bytes": 163199,
+            "snapshot_opens": 4001,
+            "late_pair_found": true,
+            "result_pairs": 1,
+            "comparison": {
+              "files_considered": 2002,
+              "compared_pairs": 9193,
+              "max_pairs": 25000,
+              "limit_reached": false,
+              "effective_search_mode": "indexed",
+              "exhaustive": false,
+              "potential_pairs": 2003001,
+              "candidate_files_visited": 2002,
+              "candidate_lookups": 18018,
+              "index_postings_scanned": 9281,
+              "index_keys": 11664,
+              "index_keys_retained_peak": 11664,
+              "index_evictions": 0,
+              "index_key_limit": 65536,
+              "index_posting_limit": 32,
+              "candidate_pairs": 9193,
+              "candidate_pairs_selected": 9193,
+              "candidate_limit_reached": false
+            }
+          },
+          {
+            "scan_metrics": {
+              "visited_entries": 2002,
+              "metadata_reads": 2004,
+              "directories": 1,
+              "progress_events": 31,
+              "sorted_results": false,
+              "elapsed_seconds": 0.07057861200155457
+            },
+            "scan_progress_callbacks": 31,
+            "requested_read_bytes": 163199,
+            "snapshot_opens": 4001,
+            "late_pair_found": true,
+            "result_pairs": 1,
+            "comparison": {
+              "files_considered": 2002,
+              "compared_pairs": 9193,
+              "max_pairs": 25000,
+              "limit_reached": false,
+              "effective_search_mode": "indexed",
+              "exhaustive": false,
+              "potential_pairs": 2003001,
+              "candidate_files_visited": 2002,
+              "candidate_lookups": 18018,
+              "index_postings_scanned": 9281,
+              "index_keys": 11664,
+              "index_keys_retained_peak": 11664,
+              "index_evictions": 0,
+              "index_key_limit": 65536,
+              "index_posting_limit": 32,
+              "candidate_pairs": 9193,
+              "candidate_pairs_selected": 9193,
+              "candidate_limit_reached": false
+            }
+          },
+          {
+            "scan_metrics": {
+              "visited_entries": 2002,
+              "metadata_reads": 2004,
+              "directories": 1,
+              "progress_events": 31,
+              "sorted_results": false,
+              "elapsed_seconds": 0.0705961740022758
+            },
+            "scan_progress_callbacks": 31,
+            "requested_read_bytes": 163199,
+            "snapshot_opens": 4001,
+            "late_pair_found": true,
+            "result_pairs": 1,
+            "comparison": {
+              "files_considered": 2002,
+              "compared_pairs": 9193,
+              "max_pairs": 25000,
+              "limit_reached": false,
+              "effective_search_mode": "indexed",
+              "exhaustive": false,
+              "potential_pairs": 2003001,
+              "candidate_files_visited": 2002,
+              "candidate_lookups": 18018,
+              "index_postings_scanned": 9281,
+              "index_keys": 11664,
+              "index_keys_retained_peak": 11664,
+              "index_evictions": 0,
+              "index_key_limit": 65536,
+              "index_posting_limit": 32,
+              "candidate_pairs": 9193,
+              "candidate_pairs_selected": 9193,
+              "candidate_limit_reached": false
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "gui": {
+    "suite": "gui-keys",
+    "python": "3.12.14",
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+    "scope": "metadata model construction and one name-key lookup per row; no file I/O, no full Qt sorting or rendering",
+    "results": [
+      {
+        "revision": "585d9f1ed0a046eda58561f1e0f47a1e01ab9a08",
+        "ui_source_sha256": "43858cf366996de750b0c95d8ebd4806e172322e5d81d1bd18348003332c2634",
+        "files": 1000,
+        "repeats": 3,
+        "median_model_build_seconds": 0.000109,
+        "median_name_key_seconds": 0.015139,
+        "runs": [
+          {
+            "date_format_calls": 2000,
+            "size_format_calls": 1000
+          },
+          {
+            "date_format_calls": 2000,
+            "size_format_calls": 1000
+          },
+          {
+            "date_format_calls": 2000,
+            "size_format_calls": 1000
+          }
+        ]
+      },
+      {
+        "revision": "working-tree",
+        "ui_source_sha256": "926a63fc18a3d34ec442865aee98cc00079b7c726bca74472eb9efd99b181d0a",
+        "files": 1000,
+        "repeats": 3,
+        "median_model_build_seconds": 0.000492,
+        "median_name_key_seconds": 0.000312,
+        "runs": [
+          {
+            "date_format_calls": 0,
+            "size_format_calls": 0
+          },
+          {
+            "date_format_calls": 0,
+            "size_format_calls": 0
+          },
+          {
+            "date_format_calls": 0,
+            "size_format_calls": 0
+          }
+        ]
+      },
+      {
+        "revision": "585d9f1ed0a046eda58561f1e0f47a1e01ab9a08",
+        "ui_source_sha256": "43858cf366996de750b0c95d8ebd4806e172322e5d81d1bd18348003332c2634",
+        "files": 2000,
+        "repeats": 3,
+        "median_model_build_seconds": 0.000168,
+        "median_name_key_seconds": 0.033783,
+        "runs": [
+          {
+            "date_format_calls": 4000,
+            "size_format_calls": 2000
+          },
+          {
+            "date_format_calls": 4000,
+            "size_format_calls": 2000
+          },
+          {
+            "date_format_calls": 4000,
+            "size_format_calls": 2000
+          }
+        ]
+      },
+      {
+        "revision": "working-tree",
+        "ui_source_sha256": "926a63fc18a3d34ec442865aee98cc00079b7c726bca74472eb9efd99b181d0a",
+        "files": 2000,
+        "repeats": 3,
+        "median_model_build_seconds": 0.001167,
+        "median_name_key_seconds": 0.000721,
+        "runs": [
+          {
+            "date_format_calls": 0,
+            "size_format_calls": 0
+          },
+          {
+            "date_format_calls": 0,
+            "size_format_calls": 0
+          },
+          {
+            "date_format_calls": 0,
+            "size_format_calls": 0
+          }
+        ]
+      }
+    ]
+  },
+  "preview": {
+    "suite": "duplicate-preview",
+    "python": "3.12.14",
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+    "scope": "keep-first preview after a completed exact scan; no execution; counters sum complete fingerprints requested, not physical disk I/O",
+    "results": [
+      {
+        "revision": "585d9f1ed0a046eda58561f1e0f47a1e01ab9a08",
+        "duplicate_groups": 4,
+        "files": 8,
+        "bytes_per_file": 1048576,
+        "repeats": 3,
+        "median_preview_seconds": 0.031124,
+        "runs": [
+          {
+            "full_fingerprint_calls": 24,
+            "fingerprint_input_bytes": 25165824,
+            "planned_copies": 4,
+            "reused_verified_results": false
+          },
+          {
+            "full_fingerprint_calls": 24,
+            "fingerprint_input_bytes": 25165824,
+            "planned_copies": 4,
+            "reused_verified_results": false
+          },
+          {
+            "full_fingerprint_calls": 24,
+            "fingerprint_input_bytes": 25165824,
+            "planned_copies": 4,
+            "reused_verified_results": false
+          }
+        ]
+      },
+      {
+        "revision": "working-tree",
+        "duplicate_groups": 4,
+        "files": 8,
+        "bytes_per_file": 1048576,
+        "repeats": 3,
+        "median_preview_seconds": 0.002539,
+        "runs": [
+          {
+            "full_fingerprint_calls": 0,
+            "fingerprint_input_bytes": 0,
+            "planned_copies": 4,
+            "reused_verified_results": true
+          },
+          {
+            "full_fingerprint_calls": 0,
+            "fingerprint_input_bytes": 0,
+            "planned_copies": 4,
+            "reused_verified_results": true
+          },
+          {
+            "full_fingerprint_calls": 0,
+            "fingerprint_input_bytes": 0,
+            "planned_copies": 4,
+            "reused_verified_results": true
+          }
+        ]
+      },
+      {
+        "revision": "585d9f1ed0a046eda58561f1e0f47a1e01ab9a08",
+        "duplicate_groups": 8,
+        "files": 16,
+        "bytes_per_file": 1048576,
+        "repeats": 3,
+        "median_preview_seconds": 0.078589,
+        "runs": [
+          {
+            "full_fingerprint_calls": 48,
+            "fingerprint_input_bytes": 50331648,
+            "planned_copies": 8,
+            "reused_verified_results": false
+          },
+          {
+            "full_fingerprint_calls": 48,
+            "fingerprint_input_bytes": 50331648,
+            "planned_copies": 8,
+            "reused_verified_results": false
+          },
+          {
+            "full_fingerprint_calls": 48,
+            "fingerprint_input_bytes": 50331648,
+            "planned_copies": 8,
+            "reused_verified_results": false
+          }
+        ]
+      },
+      {
+        "revision": "working-tree",
+        "duplicate_groups": 8,
+        "files": 16,
+        "bytes_per_file": 1048576,
+        "repeats": 3,
+        "median_preview_seconds": 0.004353,
+        "runs": [
+          {
+            "full_fingerprint_calls": 0,
+            "fingerprint_input_bytes": 0,
+            "planned_copies": 8,
+            "reused_verified_results": true
+          },
+          {
+            "full_fingerprint_calls": 0,
+            "fingerprint_input_bytes": 0,
+            "planned_copies": 8,
+            "reused_verified_results": true
+          },
+          {
+            "full_fingerprint_calls": 0,
+            "fingerprint_input_bytes": 0,
+            "planned_copies": 8,
+            "reused_verified_results": true
+          }
+        ]
+      }
+    ]
+  },
+  "payload": {
+    "suite": "recovery-payload",
+    "python": "3.12.14",
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+    "payload_source_sha256": "8a6db79ca5743b85f64f63baa535b1cd631af1fd885dab10b7c18cb6792ba983",
+    "scope": "actual pack_file and materialize with temporary files; source fingerprint preflight, journal mutation, raw-retirement protocol and filesystem allocation overhead excluded",
+    "results": [
+      {
+        "fixture": "compressible-text",
+        "bytes_per_file": 1048576,
+        "repeats": 3,
+        "median_encode_seconds": 0.008706,
+        "median_restore_seconds": 0.007103,
+        "runs": [
+          {
+            "status": "packed",
+            "logical_input_bytes": 1048576,
+            "object_payload_bytes": 7209,
+            "object_count": 1,
+            "serialized_descriptor_bytes": 750,
+            "raw_retained_bytes": 0,
+            "independent_restore_verified": true,
+            "encoder_stats": [
+              {
+                "logical_bytes": 1048576,
+                "stored_bytes": 7209,
+                "new_bytes": 7209,
+                "reused_bytes": 0,
+                "saved_bytes": 1041367,
+                "chunk_count": 1,
+                "unique_chunks": 1,
+                "compressed_chunks": 1,
+                "elapsed_seconds": 0.005286605002766009
+              }
+            ]
+          },
+          {
+            "status": "packed",
+            "logical_input_bytes": 1048576,
+            "object_payload_bytes": 7209,
+            "object_count": 1,
+            "serialized_descriptor_bytes": 750,
+            "raw_retained_bytes": 0,
+            "independent_restore_verified": true,
+            "encoder_stats": [
+              {
+                "logical_bytes": 1048576,
+                "stored_bytes": 7209,
+                "new_bytes": 7209,
+                "reused_bytes": 0,
+                "saved_bytes": 1041367,
+                "chunk_count": 1,
+                "unique_chunks": 1,
+                "compressed_chunks": 1,
+                "elapsed_seconds": 0.005086352000944316
+              }
+            ]
+          },
+          {
+            "status": "packed",
+            "logical_input_bytes": 1048576,
+            "object_payload_bytes": 7209,
+            "object_count": 1,
+            "serialized_descriptor_bytes": 750,
+            "raw_retained_bytes": 0,
+            "independent_restore_verified": true,
+            "encoder_stats": [
+              {
+                "logical_bytes": 1048576,
+                "stored_bytes": 7209,
+                "new_bytes": 7209,
+                "reused_bytes": 0,
+                "saved_bytes": 1041367,
+                "chunk_count": 1,
+                "unique_chunks": 1,
+                "compressed_chunks": 1,
+                "elapsed_seconds": 0.005307895000441931
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "fixture": "duplicate-high-entropy",
+        "bytes_per_file": 1048576,
+        "repeats": 3,
+        "median_encode_seconds": 0.063437,
+        "median_restore_seconds": 0.013841,
+        "runs": [
+          {
+            "status": "packed",
+            "logical_input_bytes": 2097152,
+            "object_payload_bytes": 1048576,
+            "object_count": 1,
+            "serialized_descriptor_bytes": 1503,
+            "raw_retained_bytes": 0,
+            "independent_restore_verified": true,
+            "encoder_stats": [
+              {
+                "logical_bytes": 1048576,
+                "stored_bytes": 1048576,
+                "new_bytes": 1048576,
+                "reused_bytes": 0,
+                "saved_bytes": 0,
+                "chunk_count": 1,
+                "unique_chunks": 1,
+                "compressed_chunks": 0,
+                "elapsed_seconds": 0.03178471000137506
+              },
+              {
+                "logical_bytes": 1048576,
+                "stored_bytes": 1048576,
+                "new_bytes": 0,
+                "reused_bytes": 1048576,
+                "saved_bytes": 0,
+                "chunk_count": 1,
+                "unique_chunks": 1,
+                "compressed_chunks": 0,
+                "elapsed_seconds": 0.029053923997707898
+              }
+            ]
+          },
+          {
+            "status": "packed",
+            "logical_input_bytes": 2097152,
+            "object_payload_bytes": 1048576,
+            "object_count": 1,
+            "serialized_descriptor_bytes": 1503,
+            "raw_retained_bytes": 0,
+            "independent_restore_verified": true,
+            "encoder_stats": [
+              {
+                "logical_bytes": 1048576,
+                "stored_bytes": 1048576,
+                "new_bytes": 1048576,
+                "reused_bytes": 0,
+                "saved_bytes": 0,
+                "chunk_count": 1,
+                "unique_chunks": 1,
+                "compressed_chunks": 0,
+                "elapsed_seconds": 0.028961570998944808
+              },
+              {
+                "logical_bytes": 1048576,
+                "stored_bytes": 1048576,
+                "new_bytes": 0,
+                "reused_bytes": 1048576,
+                "saved_bytes": 0,
+                "chunk_count": 1,
+                "unique_chunks": 1,
+                "compressed_chunks": 0,
+                "elapsed_seconds": 0.02768937400105642
+              }
+            ]
+          },
+          {
+            "status": "packed",
+            "logical_input_bytes": 2097152,
+            "object_payload_bytes": 1048576,
+            "object_count": 1,
+            "serialized_descriptor_bytes": 1503,
+            "raw_retained_bytes": 0,
+            "independent_restore_verified": true,
+            "encoder_stats": [
+              {
+                "logical_bytes": 1048576,
+                "stored_bytes": 1048576,
+                "new_bytes": 1048576,
+                "reused_bytes": 0,
+                "saved_bytes": 0,
+                "chunk_count": 1,
+                "unique_chunks": 1,
+                "compressed_chunks": 0,
+                "elapsed_seconds": 0.02806144900023355
+              },
+              {
+                "logical_bytes": 1048576,
+                "stored_bytes": 1048576,
+                "new_bytes": 0,
+                "reused_bytes": 1048576,
+                "saved_bytes": 0,
+                "chunk_count": 1,
+                "unique_chunks": 1,
+                "compressed_chunks": 0,
+                "elapsed_seconds": 0.027312099002301693
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "fixture": "unique-high-entropy",
+        "bytes_per_file": 1048576,
+        "repeats": 3,
+        "median_encode_seconds": 0.025853,
+        "median_restore_seconds": null,
+        "runs": [
+          {
+            "status": "kept-raw",
+            "logical_input_bytes": 1048576,
+            "object_payload_bytes": 0,
+            "object_count": 0,
+            "serialized_descriptor_bytes": 0,
+            "raw_retained_bytes": 1048576,
+            "independent_restore_verified": false,
+            "encoder_stats": []
+          },
+          {
+            "status": "kept-raw",
+            "logical_input_bytes": 1048576,
+            "object_payload_bytes": 0,
+            "object_count": 0,
+            "serialized_descriptor_bytes": 0,
+            "raw_retained_bytes": 1048576,
+            "independent_restore_verified": false,
+            "encoder_stats": []
+          },
+          {
+            "status": "kept-raw",
+            "logical_input_bytes": 1048576,
+            "object_payload_bytes": 0,
+            "object_count": 0,
+            "serialized_descriptor_bytes": 0,
+            "raw_retained_bytes": 1048576,
+            "independent_restore_verified": false,
+            "encoder_stats": []
+          }
+        ]
+      },
+      {
+        "fixture": "compressible-text",
+        "bytes_per_file": 2097152,
+        "repeats": 3,
+        "median_encode_seconds": 0.011678,
+        "median_restore_seconds": 0.012621,
+        "runs": [
+          {
+            "status": "packed",
+            "logical_input_bytes": 2097152,
+            "object_payload_bytes": 7209,
+            "object_count": 1,
+            "serialized_descriptor_bytes": 960,
+            "raw_retained_bytes": 0,
+            "independent_restore_verified": true,
+            "encoder_stats": [
+              {
+                "logical_bytes": 2097152,
+                "stored_bytes": 7209,
+                "new_bytes": 7209,
+                "reused_bytes": 0,
+                "saved_bytes": 2089943,
+                "chunk_count": 2,
+                "unique_chunks": 1,
+                "compressed_chunks": 1,
+                "elapsed_seconds": 0.006235418000869686
+              }
+            ]
+          },
+          {
+            "status": "packed",
+            "logical_input_bytes": 2097152,
+            "object_payload_bytes": 7209,
+            "object_count": 1,
+            "serialized_descriptor_bytes": 960,
+            "raw_retained_bytes": 0,
+            "independent_restore_verified": true,
+            "encoder_stats": [
+              {
+                "logical_bytes": 2097152,
+                "stored_bytes": 7209,
+                "new_bytes": 7209,
+                "reused_bytes": 0,
+                "saved_bytes": 2089943,
+                "chunk_count": 2,
+                "unique_chunks": 1,
+                "compressed_chunks": 1,
+                "elapsed_seconds": 0.005993375001708046
+              }
+            ]
+          },
+          {
+            "status": "packed",
+            "logical_input_bytes": 2097152,
+            "object_payload_bytes": 7209,
+            "object_count": 1,
+            "serialized_descriptor_bytes": 960,
+            "raw_retained_bytes": 0,
+            "independent_restore_verified": true,
+            "encoder_stats": [
+              {
+                "logical_bytes": 2097152,
+                "stored_bytes": 7209,
+                "new_bytes": 7209,
+                "reused_bytes": 0,
+                "saved_bytes": 2089943,
+                "chunk_count": 2,
+                "unique_chunks": 1,
+                "compressed_chunks": 1,
+                "elapsed_seconds": 0.006408612000086578
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "fixture": "duplicate-high-entropy",
+        "bytes_per_file": 2097152,
+        "repeats": 3,
+        "median_encode_seconds": 0.073445,
+        "median_restore_seconds": 0.026808,
+        "runs": [
+          {
+            "status": "packed",
+            "logical_input_bytes": 4194304,
+            "object_payload_bytes": 1048576,
+            "object_count": 1,
+            "serialized_descriptor_bytes": 1939,
+            "raw_retained_bytes": 0,
+            "independent_restore_verified": true,
+            "encoder_stats": [
+              {
+                "logical_bytes": 2097152,
+                "stored_bytes": 1048576,
+                "new_bytes": 1048576,
+                "reused_bytes": 0,
+                "saved_bytes": 1048576,
+                "chunk_count": 2,
+                "unique_chunks": 1,
+                "compressed_chunks": 0,
+                "elapsed_seconds": 0.030404997000005096
+              },
+              {
+                "logical_bytes": 2097152,
+                "stored_bytes": 1048576,
+                "new_bytes": 0,
+                "reused_bytes": 2097152,
+                "saved_bytes": 1048576,
+                "chunk_count": 2,
+                "unique_chunks": 1,
+                "compressed_chunks": 0,
+                "elapsed_seconds": 0.03001698200023384
+              }
+            ]
+          },
+          {
+            "status": "packed",
+            "logical_input_bytes": 4194304,
+            "object_payload_bytes": 1048576,
+            "object_count": 1,
+            "serialized_descriptor_bytes": 1939,
+            "raw_retained_bytes": 0,
+            "independent_restore_verified": true,
+            "encoder_stats": [
+              {
+                "logical_bytes": 2097152,
+                "stored_bytes": 1048576,
+                "new_bytes": 1048576,
+                "reused_bytes": 0,
+                "saved_bytes": 1048576,
+                "chunk_count": 2,
+                "unique_chunks": 1,
+                "compressed_chunks": 0,
+                "elapsed_seconds": 0.02994945500176982
+              },
+              {
+                "logical_bytes": 2097152,
+                "stored_bytes": 1048576,
+                "new_bytes": 0,
+                "reused_bytes": 2097152,
+                "saved_bytes": 1048576,
+                "chunk_count": 2,
+                "unique_chunks": 1,
+                "compressed_chunks": 0,
+                "elapsed_seconds": 0.030529809999279678
+              }
+            ]
+          },
+          {
+            "status": "packed",
+            "logical_input_bytes": 4194304,
+            "object_payload_bytes": 1048576,
+            "object_count": 1,
+            "serialized_descriptor_bytes": 1939,
+            "raw_retained_bytes": 0,
+            "independent_restore_verified": true,
+            "encoder_stats": [
+              {
+                "logical_bytes": 2097152,
+                "stored_bytes": 1048576,
+                "new_bytes": 1048576,
+                "reused_bytes": 0,
+                "saved_bytes": 1048576,
+                "chunk_count": 2,
+                "unique_chunks": 1,
+                "compressed_chunks": 0,
+                "elapsed_seconds": 0.030376934999367222
+              },
+              {
+                "logical_bytes": 2097152,
+                "stored_bytes": 1048576,
+                "new_bytes": 0,
+                "reused_bytes": 2097152,
+                "saved_bytes": 1048576,
+                "chunk_count": 2,
+                "unique_chunks": 1,
+                "compressed_chunks": 0,
+                "elapsed_seconds": 0.02926623000166728
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "fixture": "unique-high-entropy",
+        "bytes_per_file": 2097152,
+        "repeats": 3,
+        "median_encode_seconds": 0.052359,
+        "median_restore_seconds": null,
+        "runs": [
+          {
+            "status": "kept-raw",
+            "logical_input_bytes": 2097152,
+            "object_payload_bytes": 0,
+            "object_count": 0,
+            "serialized_descriptor_bytes": 0,
+            "raw_retained_bytes": 2097152,
+            "independent_restore_verified": false,
+            "encoder_stats": []
+          },
+          {
+            "status": "kept-raw",
+            "logical_input_bytes": 2097152,
+            "object_payload_bytes": 0,
+            "object_count": 0,
+            "serialized_descriptor_bytes": 0,
+            "raw_retained_bytes": 2097152,
+            "independent_restore_verified": false,
+            "encoder_stats": []
+          },
+          {
+            "status": "kept-raw",
+            "logical_input_bytes": 2097152,
+            "object_payload_bytes": 0,
+            "object_count": 0,
+            "serialized_descriptor_bytes": 0,
+            "raw_retained_bytes": 2097152,
+            "independent_restore_verified": false,
+            "encoder_stats": []
+          }
+        ]
+      }
+    ]
+  }
+}

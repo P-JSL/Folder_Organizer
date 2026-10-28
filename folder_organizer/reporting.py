@@ -27,6 +27,7 @@ def build_report(scan: ScanResult, *, duplicates: list[MatchGroup] | None = None
         "files": [entry.to_dict() for entry in scan.files],
         "warnings": list(scan.warnings), "cancelled": scan.cancelled,
         "scope": dict(scan.scan_options),
+        "scan_metrics": dict(getattr(scan, "scan_metrics", {})),
         "filtered_files": scan.filtered_files, "excluded_directories": scan.excluded_directories,
         "definitions": dict(DEFINITIONS),
     }
@@ -84,6 +85,9 @@ def render_html_report(report: dict) -> str:
         parts.append("<p class='notice'>중단된 분석입니다. 전체 폴더를 검사한 결과가 아닙니다.</p>")
     diagnostics = report.get("comparison_report", {})
     if diagnostics:
+        mode = diagnostics.get("effective_search_mode")
+        if mode:
+            parts.append(f"<p>후보 검색 방식: {_cell('빠른 후보 검색 · 일부 유사 파일을 놓칠 수 있음' if mode == 'indexed' else '전체 쌍 순서대로 · 안전 한도 적용')}</p>")
         labels = {"name": "이름", "text": "텍스트", "image": "이미지"}
         methods = diagnostics.get("methods", [])
         thresholds = diagnostics.get("thresholds", {})

@@ -14,7 +14,7 @@ from unittest.mock import patch
 from PIL import Image
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog
 
 from folder_organizer import diagnostics, ui
 from folder_organizer.execution_log import configure_execution_logging, shutdown_execution_logging
@@ -24,8 +24,9 @@ from folder_organizer.merging import execute_merge
 from folder_organizer.help_view import HelpCenterDialog
 from folder_organizer.history_view import HistoryDialog
 from folder_organizer.log_view import LogViewerDialog
+from folder_organizer.overview_view import InventoryOverviewDialog
 from folder_organizer.matching import find_duplicates
-from folder_organizer.operations import build_plan, execute_plan, list_history
+from folder_organizer.operations import build_plan, execute_plan, list_history, compaction_preview, compact_operation
 from folder_organizer.rule_view import ClassificationDialog
 from folder_organizer.rules import default_rules
 from folder_organizer.scanner import scan_folder
@@ -76,6 +77,10 @@ def capture(destination: Path) -> None:
             window.set_theme("light")
             shot(window, "screenshot-light.png")
             window.set_theme("dark")
+            overview_window = InventoryOverviewDialog(scan, window)
+            overview_window.resize(1040, 680)
+            shot(overview_window, "overview.png")
+            overview_window.close()
             window._load_groups(find_duplicates(scan.files), "duplicate")
             shot(window, "comparison.png")
             window.set_theme("light")
@@ -118,6 +123,41 @@ def capture(destination: Path) -> None:
             shot(merge_window, "merge.png")
             execute_merge(merge_window.plan)
             merge_window.close()
+            # Exercise the real immediate keep-first path, with no modal
+            # confirmation or new folder traversal after pressing the button.
+            cleanup_root = scratch / "CleanupExample"
+            cleanup_root.mkdir()
+            payload = ("복원 검증용 원본 문서입니다.\n" * 50_000).encode("utf-8")
+            original = cleanup_root / "01 남길 원본.txt"
+            copy = cleanup_root / "02 삭제할 사본.txt"
+            original.write_bytes(payload)
+            copy.write_bytes(payload)
+            cleanup_scan = scan_folder(cleanup_root)
+            window.load_scan_result(cleanup_scan)
+            window.folder_input.setText("예시 폴더 / CleanupExample")
+            window._load_groups(find_duplicates(cleanup_scan.files), "duplicate")
+            window.keep_first_delete()
+            deadline = time.monotonic() + 10
+            while window._worker is not None and time.monotonic() < deadline:
+                app.processEvents()
+                time.sleep(.005)
+            if window._worker is not None or not original.exists() or copy.exists():
+                raise RuntimeError("Immediate duplicate cleanup did not finish safely")
+            shot(window, "cleanup-result.png")
+            record = list_history(cleanup_root)[0]
+            compact_plan = compaction_preview(cleanup_root, record["id"])
+            def preview_only(dialog):
+                shot(dialog, "compaction.png")
+                return QDialog.DialogCode.Rejected
+            with patch.object(QDialog, "exec", preview_only):
+                window._show_compaction_preview(compact_plan)
+            optimized = compact_operation(cleanup_root, record["id"], plan=compact_plan)
+            if not optimized["recovery_compaction"]["processed"]:
+                raise RuntimeError("Recovery payload example was not compacted")
+            recovery_history = HistoryDialog(list_history(cleanup_root), window)
+            recovery_history.resize(1040, 680)
+            shot(recovery_history, "recovery-history.png")
+            recovery_history.close()
             execution_window = ExecutionLogDialog(window)
             execution_window.resize(1040, 680)
             shot(execution_window, "execution-logs.png")
@@ -126,7 +166,7 @@ def capture(destination: Path) -> None:
             app.processEvents()
         diagnostics.shutdown_logging()
         shutdown_execution_logging()
-    print(f"Saved twelve actual Qt application captures to {destination}")
+    print(f"Saved actual Qt application captures to {destination}")
 
 
 if __name__ == "__main__":

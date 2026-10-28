@@ -31,6 +31,7 @@ class ScanResult:
     filtered_files: int = 0
     excluded_directories: int = 0
     scan_options: dict = field(default_factory=dict)
+    scan_metrics: dict = field(default_factory=dict)
 
     @property
     def total_size(self) -> int:

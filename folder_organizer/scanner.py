@@ -6,6 +6,7 @@ import os
 from fnmatch import fnmatchcase
 import re
 import stat
+import time
 from pathlib import Path
 from threading import Event
 from typing import Callable
@@ -16,7 +17,7 @@ APPLICATION_SUFFIXES = {
     ".exe", ".msi", ".msix", ".appx", ".dmg", ".pkg", ".deb", ".rpm",
     ".appimage", ".desktop", ".bat", ".cmd", ".com",
 }
-INTERNAL_NAMES = {".folder-organizer"}
+INTERNAL_NAMES = {".folder-organizer", "#recycle", "@recycle", "$recycle.bin"}
 
 
 def normalize_exclude_patterns(patterns: tuple[str, ...] | list[str]) -> tuple[str, ...]:
@@ -70,6 +71,7 @@ def scan_folder(
     min_size: int = 0,
     max_size: int | None = None,
     progress_detail: Callable[[dict], None] | None = None,
+    sort_results: bool = True,
 ) -> ScanResult:
     """Inventory regular files without following links or changing any file.
 
@@ -77,10 +79,19 @@ def scan_folder(
     An invalid root is a ``ValueError``; cancellation returns a marked partial
     inventory. macOS .app bundles are inventoried as individual application
     files, so the displayed total remains the real file byte total.
+
+    Unsorted inventory visits each directory entry once: O(n + path lengths)
+    with a bounded number of exclusion patterns. The compatibility default adds
+    one O(n log n) final display ordering; callers with their own view ordering
+    can pass ``sort_results=False``. No directory listing is materialized just
+    for sorting. Progress details are sampled before dictionaries are created.
     """
     patterns = normalize_exclude_patterns(exclude_patterns)
     if type(min_size) is not int or min_size < 0 or (max_size is not None and (type(max_size) is not int or max_size < min_size)):
         raise ValueError("파일 크기 범위는 0 이상의 바이트이며 최대값은 최소값 이상이어야 합니다.")
+    if type(sort_results) is not bool:
+        raise ValueError("정렬 여부는 참 또는 거짓이어야 합니다.")
+    started = time.monotonic()
     folder = Path(os.path.abspath(os.path.expanduser(str(root))))
     if folder.is_symlink():
         raise ValueError("The selected root must be a real folder, not a symbolic link.")
@@ -93,11 +104,27 @@ def scan_folder(
         raise ValueError("The selected path is not a folder.")
     result = ScanResult(root=str(folder))
     result.scan_options = {"recursive": recursive, "include_hidden": include_hidden,
-                           "exclude_patterns": list(patterns), "min_size": min_size, "max_size": max_size}
+                           "exclude_patterns": list(patterns), "min_size": min_size,
+                           "max_size": max_size, "sort_results": sort_results}
+    metrics = result.scan_metrics
+    metrics.update(visited_entries=0, metadata_reads=1, directories=0,
+                   progress_events=0, sorted_results=sort_results, elapsed_seconds=0.0)
     total_bytes = 0
+    last_progress_time = started
+    last_progress_count = -1
 
     def report_detail(message: str, *, terminal: bool = False) -> None:
+        nonlocal last_progress_time, last_progress_count
         if progress_detail is not None:
+            count = len(result.files)
+            now = time.monotonic()
+            # Small inventories remain responsive. Large inventories avoid an
+            # allocation/callback for every file before the worker can throttle.
+            if (not terminal and count > 10 and count - last_progress_count < 100
+                    and now - last_progress_time < .07):
+                return
+            last_progress_time, last_progress_count = now, count
+            metrics["progress_events"] += 1
             progress_detail({"phase": "scan", "completed": len(result.files),
                              "total": len(result.files) if terminal and not result.cancelled else None,
                              "unit": "파일", "message": message, "bytes": total_bytes,
@@ -116,6 +143,7 @@ def scan_folder(
             break
         directory = pending.pop()
         try:
+            metrics["metadata_reads"] += 1
             current = directory.lstat()
             if stat.S_ISLNK(current.st_mode) or (
                 getattr(current, "st_file_attributes", 0)
@@ -129,74 +157,87 @@ def scan_folder(
                 continue
             if current.st_ino:
                 seen_directories.add(identity)
-            with os.scandir(directory) as stream:
-                children = sorted(stream, key=lambda item: item.name.casefold())
+            stream = os.scandir(directory)
+            metrics["directories"] += 1
         except OSError as exc:
             result.warnings.append(f"Cannot read folder {directory}: {exc}")
             continue
-        for child in children:
-            if cancel is not None and cancel.is_set():
-                result.cancelled = True
-                break
-            if child.name.casefold() in INTERNAL_NAMES:
-                continue
-            if not include_hidden and child.name.startswith("."):
-                continue
-            path = Path(child.path)
-            try:
-                details = child.stat(follow_symlinks=False)
-                if stat.S_ISLNK(details.st_mode) or (
-                    getattr(details, "st_file_attributes", 0)
-                    & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-                ):
-                    result.warnings.append(f"Skipped symbolic link: {path}")
+        try:
+            for child in stream:
+                metrics["visited_entries"] += 1
+                if cancel is not None and cancel.is_set():
+                    result.cancelled = True
+                    break
+                if child.name.casefold() in INTERNAL_NAMES:
                     continue
-                if not include_hidden and (
-                    getattr(details, "st_file_attributes", 0)
-                    & getattr(stat, "FILE_ATTRIBUTE_HIDDEN", 2)
-                ):
+                if directory == folder and child.name.casefold() == "delete_files":
+                    # App deletion storage is never another set of candidates.
                     continue
-                if stat.S_ISDIR(details.st_mode):
-                    if _excluded(path.relative_to(folder), patterns):
-                        result.excluded_directories += 1
+                if not include_hidden and child.name.startswith("."):
+                    continue
+                path = Path(child.path)
+                try:
+                    metrics["metadata_reads"] += 1
+                    details = child.stat(follow_symlinks=False)
+                    if stat.S_ISLNK(details.st_mode) or (
+                        getattr(details, "st_file_attributes", 0)
+                        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+                    ):
+                        result.warnings.append(f"Skipped symbolic link: {path}")
                         continue
-                    if recursive:
-                        pending.append(path)
-                    continue
-                if not stat.S_ISREG(details.st_mode):
-                    result.warnings.append(f"Skipped non-regular file: {path}")
-                    continue
-                # On Windows DirEntry.stat() deliberately reports st_dev/st_ino
-                # as zero. Use a path stat for the same stable file identity
-                # that open/fstat will check before hashing and recovery.
-                if os.name == "nt":
-                    details = path.stat(follow_symlinks=False)
-                    if not stat.S_ISREG(details.st_mode) or getattr(details, "st_file_attributes", 0) & 0x400:
-                        result.warnings.append(f"Skipped changed or linked file: {path}")
+                    if not include_hidden and (
+                        getattr(details, "st_file_attributes", 0)
+                        & getattr(stat, "FILE_ATTRIBUTE_HIDDEN", 2)
+                    ):
                         continue
-                relative = path.relative_to(folder)
-                if _excluded(relative, patterns) or details.st_size < min_size or (max_size is not None and details.st_size > max_size):
-                    result.filtered_files += 1
-                    continue
-                created, source = _creation_time(details)
-                suffix = path.suffix.casefold()
-                in_app_bundle = folder.name.casefold().endswith(".app") or any(part.casefold().endswith(".app") for part in relative.parts[:-1])
-                result.files.append(FileEntry(
-                    path=str(path), relative_path=str(relative), name=path.name,
-                    size=details.st_size, modified=details.st_mtime,
-                    created=created, created_source=source,
-                    kind="application" if suffix in APPLICATION_SUFFIXES or in_app_bundle else "file",
-                    suffix=suffix, mtime_ns=details.st_mtime_ns,
-                    device=details.st_dev, inode=details.st_ino,
-                ))
-                total_bytes += details.st_size
-                if progress is not None:
-                    progress(str(relative))
-                report_detail(str(relative))
-            except OSError as exc:
-                result.warnings.append(f"Cannot inspect {path}: {exc}")
+                    if stat.S_ISDIR(details.st_mode):
+                        if _excluded(path.relative_to(folder), patterns):
+                            result.excluded_directories += 1
+                            continue
+                        if recursive:
+                            pending.append(path)
+                        continue
+                    if not stat.S_ISREG(details.st_mode):
+                        result.warnings.append(f"Skipped non-regular file: {path}")
+                        continue
+                    # On Windows DirEntry.stat() deliberately reports st_dev/st_ino
+                    # as zero. Use a path stat for the same stable file identity
+                    # that open/fstat will check before hashing and recovery.
+                    if os.name == "nt":
+                        metrics["metadata_reads"] += 1
+                        details = path.stat(follow_symlinks=False)
+                        if not stat.S_ISREG(details.st_mode) or getattr(details, "st_file_attributes", 0) & 0x400:
+                            result.warnings.append(f"Skipped changed or linked file: {path}")
+                            continue
+                    relative = path.relative_to(folder)
+                    if _excluded(relative, patterns) or details.st_size < min_size or (max_size is not None and details.st_size > max_size):
+                        result.filtered_files += 1
+                        continue
+                    created, source = _creation_time(details)
+                    suffix = path.suffix.casefold()
+                    in_app_bundle = folder.name.casefold().endswith(".app") or any(part.casefold().endswith(".app") for part in relative.parts[:-1])
+                    result.files.append(FileEntry(
+                        path=str(path), relative_path=str(relative), name=path.name,
+                        size=details.st_size, modified=details.st_mtime,
+                        created=created, created_source=source,
+                        kind="application" if suffix in APPLICATION_SUFFIXES or in_app_bundle else "file",
+                        suffix=suffix, mtime_ns=details.st_mtime_ns,
+                        device=details.st_dev, inode=details.st_ino,
+                    ))
+                    total_bytes += details.st_size
+                    if progress is not None:
+                        progress(str(relative))
+                    report_detail(str(relative))
+                except OSError as exc:
+                    result.warnings.append(f"Cannot inspect {path}: {exc}")
+        except OSError as exc:
+            result.warnings.append(f"Cannot read folder {directory}: {exc}")
+        finally:
+            stream.close()
         if result.cancelled:
             break
-    result.files.sort(key=lambda item: item.relative_path.casefold())
+    if sort_results:
+        result.files.sort(key=lambda item: item.relative_path.casefold())
+    metrics["elapsed_seconds"] = max(0.0, time.monotonic() - started)
     report_detail("폴더 분석을 중단했습니다." if result.cancelled else "폴더 탐색을 완료했습니다.", terminal=True)
     return result

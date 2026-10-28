@@ -73,6 +73,7 @@ QPushButton#primary, QToolButton#primary { background: %(accent)s; color: %(acce
 QPushButton#primary:hover, QToolButton#primary:hover { background: %(accent_hover)s; border-color: %(accent_hover)s; }
 QPushButton#primary:disabled, QToolButton#primary:disabled { background: %(disabled_background)s; color: %(disabled)s; border-color: %(border)s; }
 QPushButton#caution, QToolButton#caution { color: %(warning)s; background: %(warning_background)s; border-color: %(warning)s; }
+QPushButton#caution:disabled, QToolButton#caution:disabled { color: %(disabled)s; background: %(disabled_background)s; border-color: %(border)s; }
 QPushButton#nav { text-align: left; border: 0; background: transparent; }
 QPushButton#nav:hover { background: %(accent_soft)s; }
 QLineEdit, QComboBox, QAbstractSpinBox { background: %(surface)s; border: 1px solid %(border)s; border-radius: 7px; padding: 7px; selection-background-color: %(selection)s; selection-color: %(selection_text)s; }

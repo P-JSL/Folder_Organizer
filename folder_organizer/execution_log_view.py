@@ -15,7 +15,7 @@ from .log_view import _date, _scalar
 ACTIONS = {"copy": "복사", "move": "이동", "quarantine": "안전 보관 삭제",
            "date": "날짜별 정리", "extension": "종류별 정리", "rules": "규칙 분류",
            "duplicate_auto": "중복 자동 정리", "undo": "되돌리기",
-           "merge": "내용 병합", "repair": "파일 복구"}
+           "merge": "내용 병합", "repair": "파일 복구", "compact": "복원 데이터 최적화"}
 STATUSES = {"started": "시작", "running": "진행 중", "completed": "완료",
             "partial": "일부 처리", "failed": "실패", "copy_preserved": "사본 보존 · 확인 필요",
             "restored": "복원 완료", "unchanged": "변경 없음", "undone": "되돌리기 완료",
