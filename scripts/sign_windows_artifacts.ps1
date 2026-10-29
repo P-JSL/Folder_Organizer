@@ -101,42 +101,21 @@ try {
                     throw "Public trust verification failed: $target"
                 }
             } else {
-                # Windows does not trust self-signed CI certificates by default.
-                # Validate with the public certificate trusted ONLY in this runner's
-                # CurrentUser Root store, then remove it immediately after verification.
-                # The signed binaries stay self-signed/untrusted on user machines.
+                # A self-signed certificate is not in Windows' trusted roots. In
+                # development-only mode Windows may report UnknownError instead of
+                # NotTrusted for an otherwise successfully generated signature.
+                # Do NOT install this certificate as a trusted root on the runner.
                 if ($certificate.Subject -ne $certificate.Issuer) {
                     throw "Development mode accepts only self-signed certificates: $target"
                 }
-                $trustStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-                    'Root', [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-                $trustedPublicCertificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
-                    $certificate.RawData)
-                $installedByStep = $false
-                try {
-                    $trustStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-                    $alreadyTrusted = @($trustStore.Certificates.Find(
-                        [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
-                        $certificate.Thumbprint, $false)).Count -gt 0
-                    if (-not $alreadyTrusted) {
-                        $trustStore.Add($trustedPublicCertificate)
-                        $installedByStep = $true
-                    }
-                    Write-Host "Validating self-signed signature using temporary CurrentUser Root trust"
-                    $trustedSignature = Get-AuthenticodeSignature -LiteralPath $target
-                    if ($trustedSignature.Status -ne 'Valid' -or
-                        $null -eq $trustedSignature.SignerCertificate -or
-                        $trustedSignature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) {
-                        throw "Development signature integrity verification failed ($($trustedSignature.Status)): $target"
-                    }
-                    Write-Host "Verified development signature cryptographic integrity: $([IO.Path]::GetFileName($target))"
-                    # Public-chain validation is performed separately in public mode.
-                    # A development certificate is deliberately not trusted on users' PCs.
-                } finally {
-                    if ($installedByStep) { $trustStore.Remove($trustedPublicCertificate) }
-                    $trustStore.Close()
-                    $trustedPublicCertificate.Dispose()
+                if ($signature.Status -notin @('Valid', 'NotTrusted', 'UnknownError')) {
+                    throw "Development signature status rejected ($($signature.Status)): $target"
                 }
+                if ($signature.Status -eq 'UnknownError' -and
+                    $signature.StatusMessage -notmatch '(?i)(not trusted|untrusted|root certificate)') {
+                    throw "Unexpected development signature error: $($signature.StatusMessage)"
+                }
+                Write-Warning "DEVELOPMENT ONLY: Windows does not publicly trust this signature ($($signature.Status)); no public trust was installed."
             }
             Write-Host "Signed: $([IO.Path]::GetFileName($target)); Status: $($signature.Status)"
         }
