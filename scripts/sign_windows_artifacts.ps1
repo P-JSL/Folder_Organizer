@@ -100,8 +100,43 @@ try {
                 if ($LASTEXITCODE -ne 0 -or $signature.Status -ne 'Valid') {
                     throw "Public trust verification failed: $target"
                 }
-            } elseif ($signature.Status -notin @('Valid', 'NotTrusted')) {
-                throw "Development signature check failed ($($signature.Status)): $target"
+            } else {
+                # Windows does not trust self-signed CI certificates by default.
+                # Validate with the public certificate trusted ONLY in this runner's
+                # CurrentUser Root store, then remove it immediately after verification.
+                # The signed binaries stay self-signed/untrusted on user machines.
+                if ($certificate.Subject -ne $certificate.Issuer) {
+                    throw "Development mode accepts only self-signed certificates: $target"
+                }
+                $trustStore = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+                    'Root', [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+                $trustedPublicCertificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+                    $certificate.RawData)
+                $installedByStep = $false
+                try {
+                    $trustStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+                    $alreadyTrusted = @($trustStore.Certificates.Find(
+                        [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+                        $certificate.Thumbprint, $false)).Count -gt 0
+                    if (-not $alreadyTrusted) {
+                        $trustStore.Add($trustedPublicCertificate)
+                        $installedByStep = $true
+                    }
+                    $trustedSignature = Get-AuthenticodeSignature -LiteralPath $target
+                    if ($trustedSignature.Status -ne 'Valid' -or
+                        $null -eq $trustedSignature.SignerCertificate -or
+                        $trustedSignature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) {
+                        throw "Development signature integrity verification failed ($($trustedSignature.Status)): $target"
+                    }
+                    & $signTool verify /pa /v $target
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Development Authenticode verification failed: $target"
+                    }
+                } finally {
+                    if ($installedByStep) { $trustStore.Remove($trustedPublicCertificate) }
+                    $trustStore.Close()
+                    $trustedPublicCertificate.Dispose()
+                }
             }
             Write-Host "Signed: $([IO.Path]::GetFileName($target)); Status: $($signature.Status)"
         }
