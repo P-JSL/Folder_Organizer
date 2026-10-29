@@ -1,0 +1,739 @@
+{
+  "suite": "cross-engine-semantics-fresh-process-v070",
+  "platform": "Windows-2025Server-10.0.26100-SP0",
+  "native_windows": true,
+  "python_driver": "3.12.10",
+  "logical_cpus": 4,
+  "repeats_per_engine_per_distribution": 5,
+  "scope": "fresh CLI processes including startup, inventory, exact detection and JSON serialization; synthetic local files only",
+  "limitations": [
+    "OS page cache and background activity are uncontrolled; fixture generation and integrity hashes warm it",
+    "No cold-cache, physical disk, SSD, NAS, GUI responsiveness, or universal speed claim",
+    "Process I/O transfer bytes include runtime/report I/O and are not physical storage bytes",
+    "Memory values are maximum observed API high-water counters at 20ms polling; unavailable final counters are not invented",
+    "Windows peak private commit is PeakPagefileUsage; peak working set is a different metric",
+    "Algorithm sample/full-hash byte counters are requested reads, separate from OS process I/O",
+    "Dates use exact integer nanoseconds; creation time is compared only where both engines expose it, availability differences are counted"
+  ],
+  "source": {
+    "git_commit": "9e27008ecb9e4e175d8cc619f11b798ef7fc42a9",
+    "source_sha256": {
+      "folder_organizer/scanner.py": "81a15b823da6ce2162578fc24dc1f5226fdb0bd0fccd2d178b0e545d4e4ad9ad",
+      "folder_organizer/matching.py": "01066b47caeacaf73aeba0de9dabc8c8e173e22287a706e3c56a5059f589c5aa",
+      "folder_organizer/cli.py": "8c091327c01984f71fefc6a4361c40565b3f8a7a53e136b15fcfc87799a9348a",
+      "folder_organizer/reporting.py": "113655e713a16ad1af8f59fd6fde18cd51864be9be8ad472393274851d5ec2e9",
+      "rust-app/src/core.rs": "93978caadb615f32295a51fd5083df71434d874b94e785e6f1a3dc6e440b6d13",
+      "rust-app/src/cli.rs": "1170784abe83bd6522a27a813829a79581904b50ce7de9d4244f83a0bf44ee85",
+      "rust-app/src/reporting.rs": "c2b5a85efd409d6a0fd68f87ef899915b6c485f17dd0067ad27e7d9157a85ec2",
+      "rust-app/Cargo.lock": "de85763170a8ae77980d7e5275149dd980ada6e9f87be57b85cbb45c88736c7b",
+      "scripts/benchmark_editions_v070.py": "497629d218ee74ca039d6bf1c3dee3c3d5ab92f03d0bc89d452eb494a3396443"
+    },
+    "commands": {
+      "Python": [
+        "dist/FolderOrganizer/FolderOrganizer.exe",
+        "--cli"
+      ],
+      "Rust": [
+        "dist/FolderOrganizerRust/FolderOrganizerRustCLI.exe"
+      ]
+    },
+    "executable_sha256": {
+      "Python": "8065b68b4c005ccbce7f3a96e31ffc814e172b2d3af726b1b260bbe9c4e947e6",
+      "Rust": "23b81b27e4decd1152651d9f878367b86ab674ec6db713c78f6e7f5d4eaad960"
+    }
+  },
+  "results": [
+    {
+      "distribution": "small",
+      "inventory_files": 1006,
+      "source_files_including_excluded": 1011,
+      "inventory_bytes": 1024128,
+      "expected_exact_groups": [
+        [
+          "동일/사본.txt",
+          "동일/첫 파일.txt"
+        ],
+        [
+          "빈 파일 A.txt",
+          "빈 파일 B.txt"
+        ]
+      ],
+      "fixture_manifest_sha256": "2be588935986c98eff34fb8c69c79552a5ea3afab081a16926c60749734b5444",
+      "source_bytes_unchanged": true,
+      "runs": [
+        {
+          "engine": "Python",
+          "repeat": 1,
+          "position": 1,
+          "wall_seconds": 1.9792103000000054,
+          "cpu_seconds": 1.703125,
+          "peak_private_commit_bytes": 23539712,
+          "peak_working_set_bytes": 35819520,
+          "private_bytes_last_observed": 22106112,
+          "process_read_transfer_bytes": 3593431,
+          "process_write_transfer_bytes": 249194,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "candidate_files": 1004,
+            "sampled_files": 0,
+            "sample_bytes": 0,
+            "full_hash_files": 1004,
+            "full_hash_bytes": 1024064,
+            "byte_comparison_bytes": 64,
+            "hardlink_aliases": 0,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 0,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Rust",
+          "repeat": 1,
+          "position": 2,
+          "wall_seconds": 0.3991501999999798,
+          "cpu_seconds": 0.390625,
+          "peak_private_commit_bytes": 4218880,
+          "peak_working_set_bytes": 8183808,
+          "private_bytes_last_observed": 4030464,
+          "process_read_transfer_bytes": 1024064,
+          "process_write_transfer_bytes": 240987,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "byte_comparison_bytes": 0,
+            "candidate_files": 1004,
+            "full_hash_bytes": 1024064,
+            "full_hash_files": 1004,
+            "hardlink_aliases": 0,
+            "sample_bytes": 0,
+            "sampled_files": 0,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 1006,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Rust",
+          "repeat": 2,
+          "position": 1,
+          "wall_seconds": 0.376838499999991,
+          "cpu_seconds": 0.359375,
+          "peak_private_commit_bytes": 4177920,
+          "peak_working_set_bytes": 7806976,
+          "private_bytes_last_observed": 3682304,
+          "process_read_transfer_bytes": 1024064,
+          "process_write_transfer_bytes": 240987,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "byte_comparison_bytes": 0,
+            "candidate_files": 1004,
+            "full_hash_bytes": 1024064,
+            "full_hash_files": 1004,
+            "hardlink_aliases": 0,
+            "sample_bytes": 0,
+            "sampled_files": 0,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 1006,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Python",
+          "repeat": 2,
+          "position": 2,
+          "wall_seconds": 1.6590975999999955,
+          "cpu_seconds": 1.65625,
+          "peak_private_commit_bytes": 23556096,
+          "peak_working_set_bytes": 35717120,
+          "private_bytes_last_observed": 22470656,
+          "process_read_transfer_bytes": 3593431,
+          "process_write_transfer_bytes": 249194,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "candidate_files": 1004,
+            "sampled_files": 0,
+            "sample_bytes": 0,
+            "full_hash_files": 1004,
+            "full_hash_bytes": 1024064,
+            "byte_comparison_bytes": 64,
+            "hardlink_aliases": 0,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 1006,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Python",
+          "repeat": 3,
+          "position": 1,
+          "wall_seconds": 1.6474283000000014,
+          "cpu_seconds": 1.625,
+          "peak_private_commit_bytes": 23126016,
+          "peak_working_set_bytes": 35487744,
+          "private_bytes_last_observed": 21991424,
+          "process_read_transfer_bytes": 3593431,
+          "process_write_transfer_bytes": 249193,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "candidate_files": 1004,
+            "sampled_files": 0,
+            "sample_bytes": 0,
+            "full_hash_files": 1004,
+            "full_hash_bytes": 1024064,
+            "byte_comparison_bytes": 64,
+            "hardlink_aliases": 0,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 1006,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Rust",
+          "repeat": 3,
+          "position": 2,
+          "wall_seconds": 0.3651583000000187,
+          "cpu_seconds": 0.328125,
+          "peak_private_commit_bytes": 4194304,
+          "peak_working_set_bytes": 7823360,
+          "private_bytes_last_observed": 4079616,
+          "process_read_transfer_bytes": 1024064,
+          "process_write_transfer_bytes": 240987,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "byte_comparison_bytes": 0,
+            "candidate_files": 1004,
+            "full_hash_bytes": 1024064,
+            "full_hash_files": 1004,
+            "hardlink_aliases": 0,
+            "sample_bytes": 0,
+            "sampled_files": 0,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 1006,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Rust",
+          "repeat": 4,
+          "position": 1,
+          "wall_seconds": 0.36764490000001615,
+          "cpu_seconds": 0.40625,
+          "peak_private_commit_bytes": 4145152,
+          "peak_working_set_bytes": 7811072,
+          "private_bytes_last_observed": 4018176,
+          "process_read_transfer_bytes": 1024064,
+          "process_write_transfer_bytes": 240987,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "byte_comparison_bytes": 0,
+            "candidate_files": 1004,
+            "full_hash_bytes": 1024064,
+            "full_hash_files": 1004,
+            "hardlink_aliases": 0,
+            "sample_bytes": 0,
+            "sampled_files": 0,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 1006,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Python",
+          "repeat": 4,
+          "position": 2,
+          "wall_seconds": 1.63412790000001,
+          "cpu_seconds": 1.640625,
+          "peak_private_commit_bytes": 23359488,
+          "peak_working_set_bytes": 35762176,
+          "private_bytes_last_observed": 21803008,
+          "process_read_transfer_bytes": 3593431,
+          "process_write_transfer_bytes": 249193,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "candidate_files": 1004,
+            "sampled_files": 0,
+            "sample_bytes": 0,
+            "full_hash_files": 1004,
+            "full_hash_bytes": 1024064,
+            "byte_comparison_bytes": 64,
+            "hardlink_aliases": 0,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 1006,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Python",
+          "repeat": 5,
+          "position": 1,
+          "wall_seconds": 1.6453763000000095,
+          "cpu_seconds": 1.625,
+          "peak_private_commit_bytes": 23257088,
+          "peak_working_set_bytes": 35618816,
+          "private_bytes_last_observed": 22016000,
+          "process_read_transfer_bytes": 3593431,
+          "process_write_transfer_bytes": 249194,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "candidate_files": 1004,
+            "sampled_files": 0,
+            "sample_bytes": 0,
+            "full_hash_files": 1004,
+            "full_hash_bytes": 1024064,
+            "byte_comparison_bytes": 64,
+            "hardlink_aliases": 0,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 1006,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Rust",
+          "repeat": 5,
+          "position": 2,
+          "wall_seconds": 0.382790099999994,
+          "cpu_seconds": 0.34375,
+          "peak_private_commit_bytes": 4120576,
+          "peak_working_set_bytes": 7815168,
+          "private_bytes_last_observed": 4120576,
+          "process_read_transfer_bytes": 1024064,
+          "process_write_transfer_bytes": 240987,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "byte_comparison_bytes": 0,
+            "candidate_files": 1004,
+            "full_hash_bytes": 1024064,
+            "full_hash_files": 1004,
+            "hardlink_aliases": 0,
+            "sample_bytes": 0,
+            "sampled_files": 0,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 1006,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        }
+      ],
+      "medians": {
+        "Python": {
+          "wall_seconds": 1.6474283000000014,
+          "cpu_seconds": 1.640625,
+          "peak_private_commit_bytes": 23359488,
+          "peak_working_set_bytes": 35717120,
+          "process_read_transfer_bytes": 3593431,
+          "process_write_transfer_bytes": 249194
+        },
+        "Rust": {
+          "wall_seconds": 0.376838499999991,
+          "cpu_seconds": 0.359375,
+          "peak_private_commit_bytes": 4177920,
+          "peak_working_set_bytes": 7815168,
+          "process_read_transfer_bytes": 1024064,
+          "process_write_transfer_bytes": 240987
+        }
+      }
+    },
+    {
+      "distribution": "large",
+      "inventory_files": 12,
+      "source_files_including_excluded": 17,
+      "inventory_bytes": 50331648,
+      "expected_exact_groups": [
+        [
+          "동일/대용량 사본.bin",
+          "동일/대용량 원본.bin"
+        ]
+      ],
+      "fixture_manifest_sha256": "1471beb3195cd23418ede93b343562452cf0048676838832b463a6bcd0de537f",
+      "source_bytes_unchanged": true,
+      "runs": [
+        {
+          "engine": "Python",
+          "repeat": 1,
+          "position": 1,
+          "wall_seconds": 0.43294080000001145,
+          "cpu_seconds": 0.3125,
+          "peak_private_commit_bytes": 23101440,
+          "peak_working_set_bytes": 35274752,
+          "private_bytes_last_observed": 19922944,
+          "process_read_transfer_bytes": 30094423,
+          "process_write_transfer_bytes": 4648,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "candidate_files": 12,
+            "sampled_files": 12,
+            "sample_bytes": 2359296,
+            "full_hash_files": 4,
+            "full_hash_bytes": 16777216,
+            "byte_comparison_bytes": 8388608,
+            "hardlink_aliases": 0,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 0,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Rust",
+          "repeat": 1,
+          "position": 2,
+          "wall_seconds": 0.05027239999998301,
+          "cpu_seconds": 0.03125,
+          "peak_private_commit_bytes": 9699328,
+          "peak_working_set_bytes": 13303808,
+          "private_bytes_last_observed": 9654272,
+          "process_read_transfer_bytes": 19136512,
+          "process_write_transfer_bytes": 4395,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "byte_comparison_bytes": 0,
+            "candidate_files": 12,
+            "full_hash_bytes": 16777216,
+            "full_hash_files": 4,
+            "hardlink_aliases": 0,
+            "sample_bytes": 2359296,
+            "sampled_files": 12,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 12,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Rust",
+          "repeat": 2,
+          "position": 1,
+          "wall_seconds": 0.04598029999999653,
+          "cpu_seconds": 0.03125,
+          "peak_private_commit_bytes": 9707520,
+          "peak_working_set_bytes": 13316096,
+          "private_bytes_last_observed": 1257472,
+          "process_read_transfer_bytes": 19136512,
+          "process_write_transfer_bytes": 4395,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "byte_comparison_bytes": 0,
+            "candidate_files": 12,
+            "full_hash_bytes": 16777216,
+            "full_hash_files": 4,
+            "hardlink_aliases": 0,
+            "sample_bytes": 2359296,
+            "sampled_files": 12,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 12,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Python",
+          "repeat": 2,
+          "position": 2,
+          "wall_seconds": 0.2909492,
+          "cpu_seconds": 0.28125,
+          "peak_private_commit_bytes": 22929408,
+          "peak_working_set_bytes": 35332096,
+          "private_bytes_last_observed": 22867968,
+          "process_read_transfer_bytes": 30094423,
+          "process_write_transfer_bytes": 4649,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "candidate_files": 12,
+            "sampled_files": 12,
+            "sample_bytes": 2359296,
+            "full_hash_files": 4,
+            "full_hash_bytes": 16777216,
+            "byte_comparison_bytes": 8388608,
+            "hardlink_aliases": 0,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 12,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Python",
+          "repeat": 3,
+          "position": 1,
+          "wall_seconds": 0.28442889999999466,
+          "cpu_seconds": 0.28125,
+          "peak_private_commit_bytes": 22265856,
+          "peak_working_set_bytes": 35139584,
+          "private_bytes_last_observed": 19038208,
+          "process_read_transfer_bytes": 30094423,
+          "process_write_transfer_bytes": 4648,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "candidate_files": 12,
+            "sampled_files": 12,
+            "sample_bytes": 2359296,
+            "full_hash_files": 4,
+            "full_hash_bytes": 16777216,
+            "byte_comparison_bytes": 8388608,
+            "hardlink_aliases": 0,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 12,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Rust",
+          "repeat": 3,
+          "position": 2,
+          "wall_seconds": 0.04923660000000041,
+          "cpu_seconds": 0.046875,
+          "peak_private_commit_bytes": 9732096,
+          "peak_working_set_bytes": 13328384,
+          "private_bytes_last_observed": 9666560,
+          "process_read_transfer_bytes": 19136512,
+          "process_write_transfer_bytes": 4395,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "byte_comparison_bytes": 0,
+            "candidate_files": 12,
+            "full_hash_bytes": 16777216,
+            "full_hash_files": 4,
+            "hardlink_aliases": 0,
+            "sample_bytes": 2359296,
+            "sampled_files": 12,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 12,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Rust",
+          "repeat": 4,
+          "position": 1,
+          "wall_seconds": 0.046218799999991234,
+          "cpu_seconds": 0.03125,
+          "peak_private_commit_bytes": 9682944,
+          "peak_working_set_bytes": 13307904,
+          "private_bytes_last_observed": 9646080,
+          "process_read_transfer_bytes": 19136512,
+          "process_write_transfer_bytes": 4395,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "byte_comparison_bytes": 0,
+            "candidate_files": 12,
+            "full_hash_bytes": 16777216,
+            "full_hash_files": 4,
+            "hardlink_aliases": 0,
+            "sample_bytes": 2359296,
+            "sampled_files": 12,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 12,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Python",
+          "repeat": 4,
+          "position": 2,
+          "wall_seconds": 0.2784256000000198,
+          "cpu_seconds": 0.265625,
+          "peak_private_commit_bytes": 22568960,
+          "peak_working_set_bytes": 35250176,
+          "private_bytes_last_observed": 22507520,
+          "process_read_transfer_bytes": 30094423,
+          "process_write_transfer_bytes": 4647,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "candidate_files": 12,
+            "sampled_files": 12,
+            "sample_bytes": 2359296,
+            "full_hash_files": 4,
+            "full_hash_bytes": 16777216,
+            "byte_comparison_bytes": 8388608,
+            "hardlink_aliases": 0,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 12,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Python",
+          "repeat": 5,
+          "position": 1,
+          "wall_seconds": 0.27598140000000626,
+          "cpu_seconds": 0.265625,
+          "peak_private_commit_bytes": 22274048,
+          "peak_working_set_bytes": 34934784,
+          "private_bytes_last_observed": 19054592,
+          "process_read_transfer_bytes": 30094423,
+          "process_write_transfer_bytes": 4648,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "candidate_files": 12,
+            "sampled_files": 12,
+            "sample_bytes": 2359296,
+            "full_hash_files": 4,
+            "full_hash_bytes": 16777216,
+            "byte_comparison_bytes": 8388608,
+            "hardlink_aliases": 0,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 12,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        },
+        {
+          "engine": "Rust",
+          "repeat": 5,
+          "position": 2,
+          "wall_seconds": 0.053198400000013635,
+          "cpu_seconds": 0.03125,
+          "peak_private_commit_bytes": 9715712,
+          "peak_working_set_bytes": 13377536,
+          "private_bytes_last_observed": 9658368,
+          "process_read_transfer_bytes": 19136512,
+          "process_write_transfer_bytes": 4395,
+          "cpu_method": "GetProcessTimes",
+          "memory_io_method": "GetProcessMemoryInfo/GetProcessIoCounters",
+          "duplicate_metrics": {
+            "byte_comparison_bytes": 0,
+            "candidate_files": 12,
+            "full_hash_bytes": 16777216,
+            "full_hash_files": 4,
+            "hardlink_aliases": 0,
+            "sample_bytes": 2359296,
+            "sampled_files": 12,
+            "skipped_files": 0
+          },
+          "timestamp_comparison": {
+            "created_ns_compared": 12,
+            "created_ns_availability_differences": 0,
+            "created_ns_unavailable_both": 0
+          },
+          "app_version": "0.7.0",
+          "schema_version": "folder-organizer.common.v1"
+        }
+      ],
+      "medians": {
+        "Python": {
+          "wall_seconds": 0.28442889999999466,
+          "cpu_seconds": 0.28125,
+          "peak_private_commit_bytes": 22568960,
+          "peak_working_set_bytes": 35250176,
+          "process_read_transfer_bytes": 30094423,
+          "process_write_transfer_bytes": 4648
+        },
+        "Rust": {
+          "wall_seconds": 0.04923660000000041,
+          "cpu_seconds": 0.03125,
+          "peak_private_commit_bytes": 9707520,
+          "peak_working_set_bytes": 13316096,
+          "process_read_transfer_bytes": 19136512,
+          "process_write_transfer_bytes": 4395
+        }
+      }
+    }
+  ]
+}

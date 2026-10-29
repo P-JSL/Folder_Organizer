@@ -47,4 +47,4 @@ Python CLI에서 `--duplicates --similar`를 함께 요청하면 유사도 내�
 
 `scripts/benchmark_editions_v070.py`는 두 실제 배포 CLI를 같은 호스트·입력에서 최소 5회씩 순서를 바꿔 실행합니다. 새 프로세스 시작·목록·중복 검사·공통 JSON 내보내기를 포함한 합성 작업의 벽시계·CPU·가능한 Windows 프로세스 메모리·I/O를 기록합니다. OS 캐시를 비우지 않으며 입력 생성·해시 확인이 캐시를 따뜻하게 할 수 있습니다. Private Bytes, peak private commit, working set, 알고리즘 읽기량, 프로세스 I/O를 서로 같은 지표처럼 해석하지 않습니다. 실제 NAS·물리 SSD·콜드 캐시·GUI 10만 행의 결과로 확대하지 않습니다.
 
-최종 배포 파일의 실행 결과와 측정 자료는 정식 빌드 작업 및 릴리즈 첨부 기록으로 제공하며, 원래 PDF의 실행 미측정 부분을 추정 수치로 채우지 않습니다.
+최종 배포 파일의 실행 결과와 측정 자료는 [실제 배포 결과](RELEASE_RESULTS_0.7.0.md), [원시 Windows 측정](EDITIONS_BENCHMARK_0.7.0.json) 및 릴리즈 첨부 기록으로 제공합니다. 원래 PDF의 실행 미측정 부분을 추정 수치로 채우지 않습니다. 새 로컬 45건·Windows 3건이 통과했으며 기존 통과 검사와 미수정 기능 검사는 생략했습니다.
