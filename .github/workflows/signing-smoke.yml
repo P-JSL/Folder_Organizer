@@ -25,12 +25,18 @@ jobs:
             -KeyExportPolicy Exportable -NotAfter (Get-Date).AddDays(2)
           $password = [guid]::NewGuid().ToString('N')
           $pfx = Join-Path $env:RUNNER_TEMP 'signing-smoke.pfx'
-          $testExecutable = Join-Path $env:RUNNER_TEMP 'signing-smoke.exe'
+          $sourceDirectory = Join-Path $env:RUNNER_TEMP 'signing-smoke-source'
+          $outputDirectory = Join-Path $env:RUNNER_TEMP 'signing-smoke-output'
+          $testExecutable = Join-Path $outputDirectory 'SigningSmoke.exe'
           try {
             $secure = ConvertTo-SecureString $password -AsPlainText -Force
             Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $secure | Out-Null
-            Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\whoami.exe') -Destination $testExecutable
-            (Get-Item -LiteralPath $testExecutable).IsReadOnly = $false
+            & dotnet new console --name SigningSmoke --output $sourceDirectory --no-restore
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create isolated test executable project.' }
+            & dotnet publish (Join-Path $sourceDirectory 'SigningSmoke.csproj') -c Release -r win-x64 --self-contained false -p:UseAppHost=true --output $outputDirectory
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $testExecutable)) {
+              throw 'Could not build unsigned smoke test EXE.'
+            }
             $env:WINDOWS_SIGNING_PFX_BASE64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($pfx))
             $env:WINDOWS_SIGNING_PFX_PASSWORD = $password
             $env:WINDOWS_SIGNING_REQUIRED = 'true'
@@ -45,7 +51,8 @@ jobs:
             Write-Host "Development Authenticode verified ($($signature.Status))."
           }
           finally {
-            Remove-Item -LiteralPath $pfx, $testExecutable -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $pfx -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $sourceDirectory, $outputDirectory -Recurse -Force -ErrorAction SilentlyContinue
             Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -Force -ErrorAction SilentlyContinue
             Remove-Item Env:WINDOWS_SIGNING_PFX_BASE64 -ErrorAction SilentlyContinue
             Remove-Item Env:WINDOWS_SIGNING_PFX_PASSWORD -ErrorAction SilentlyContinue
