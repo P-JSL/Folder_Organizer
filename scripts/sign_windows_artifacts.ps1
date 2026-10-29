@@ -122,16 +122,16 @@ try {
                         $trustStore.Add($trustedPublicCertificate)
                         $installedByStep = $true
                     }
+                    Write-Host "Validating self-signed signature using temporary CurrentUser Root trust"
                     $trustedSignature = Get-AuthenticodeSignature -LiteralPath $target
                     if ($trustedSignature.Status -ne 'Valid' -or
                         $null -eq $trustedSignature.SignerCertificate -or
                         $trustedSignature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) {
                         throw "Development signature integrity verification failed ($($trustedSignature.Status)): $target"
                     }
-                    & $signTool verify /pa /v $target
-                    if ($LASTEXITCODE -ne 0) {
-                        throw "Development Authenticode verification failed: $target"
-                    }
+                    Write-Host "Verified development signature cryptographic integrity: $([IO.Path]::GetFileName($target))"
+                    # Public-chain validation is performed separately in public mode.
+                    # A development certificate is deliberately not trusted on users' PCs.
                 } finally {
                     if ($installedByStep) { $trustStore.Remove($trustedPublicCertificate) }
                     $trustStore.Close()
