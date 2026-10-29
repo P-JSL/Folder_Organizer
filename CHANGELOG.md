@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0 — 2026-10-29 · Python / Rust
+
+- Add a separate native Rust desktop, console interface and independent update helper covering inventory, exact/similar review, recoverable operations, rules, merges, history, compact recovery data, health checks and reports.
+- Separate edition package identifiers, update assets and recovery journals; exclude both editions' metadata from inventories.
+- Reduce Python inventory path/pattern work, per-record memory and serialization overhead; optimize metadata summaries and bounded name-comparison/progress caches without weakening exact duplicate verification.
+- Consolidate duplicated date/extension controls into the shared rule editor and add an extension preset; preserve existing operation and recovery compatibility.
+- Document official-source 1.0 readiness research, feature decisions and measured performance scope. Reuse previous verification records; run only new or changed-path checks.
+
 ## 0.5.0 — 2026-10-28
 
 - Reuse process-authenticated duplicate results for immediate keep-first deletion with no rescan or extra confirmation; update the displayed inventory from operation receipts.

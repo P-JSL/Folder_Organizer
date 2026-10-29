@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import heapq
 import math
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import time
 from typing import Iterable
 
@@ -29,6 +29,10 @@ _SUFFIXES = {
     "audio": frozenset({".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma", ".aiff", ".opus"}),
     "archives": frozenset({".zip", ".7z", ".rar", ".tar", ".gz", ".bz2", ".xz", ".zst"}),
 }
+_CATEGORY_BY_SUFFIX = {}
+for _category, _extensions in _SUFFIXES.items():
+    for _extension in _extensions:
+        _CATEGORY_BY_SUFFIX.setdefault(_extension, _category)
 FOLDER_LIMIT = 20
 DATE_LABELS = {
     "recent_30": "최근 30일 수정", "year": "31일~1년 전 수정", "older": "1년 이상 수정 없음",
@@ -40,18 +44,20 @@ def inventory_category(entry: FileEntry) -> str:
     """Return a fixed category key; this is a display aid, not file inspection."""
     if entry.kind == "application":
         return "applications"
-    suffix = entry.suffix.casefold()
-    return next((key for key, values in _SUFFIXES.items() if suffix in values), "other")
+    return _CATEGORY_BY_SUFFIX.get(entry.suffix.casefold(), "other")
 
 
 def inventory_folder(entry: FileEntry, root: str | Path) -> str:
     """Return the immediate inventory subfolder, or '.' for a direct child."""
     # Use the recorded relative name without any filesystem lookup. It also
     # makes an exported Windows inventory readable on another platform.
-    relative = PurePosixPath(entry.relative_path.replace("\\", "/"))
-    if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+    relative = entry.relative_path.replace("\\", "/")
+    # Preserve PurePosixPath's treatment of redundant separators and '.' while
+    # avoiding a path object, cached parsing state and parts tuple per file.
+    parts = [part for part in relative.split("/") if part and part != "."]
+    if relative.startswith("/") or ".." in parts or not parts:
         return "[범위 밖 경로]"
-    return relative.parts[0] if len(relative.parts) > 1 else "."
+    return parts[0] if len(parts) > 1 else "."
 
 
 def inventory_date_bucket(entry: FileEntry, now: float | None = None) -> str:
@@ -112,18 +118,16 @@ def summarize_inventory(entries: Iterable[FileEntry], root: str | Path, top_limi
             record["bytes"] += entry.size
         # The sequence number breaks size ties without comparing FileEntry or
         # repeatedly comparing long filenames. Original inventory order wins.
-        candidate = (entry.size, -position, entry)
         if len(largest) < top_limit:
-            heapq.heappush(largest, candidate)
-        elif candidate[:2] > largest[0][:2]:
-            heapq.heapreplace(largest, candidate)
+            heapq.heappush(largest, (entry.size, -position, entry))
+        elif entry.size > largest[0][0]:
+            # Later entries never displace an equal-size earlier entry. Build
+            # a tuple only for files which actually enter the bounded heap.
+            heapq.heapreplace(largest, (entry.size, -position, entry))
     selected_folders = _top(folders.values(), FOLDER_LIMIT)
-    selected_keys = {record["key"] for record in selected_folders}
-    others = {"count": 0, "bytes": 0, "folders": len(folders) - len(selected_folders)}
-    for key, record in folders.items():
-        if key not in selected_keys:
-            others["count"] += record["count"]
-            others["bytes"] += record["bytes"]
+    others = {"count": total_files - sum(record["count"] for record in selected_folders),
+              "bytes": total_bytes - sum(record["bytes"] for record in selected_folders),
+              "folders": len(folders) - len(selected_folders)}
     ordered = sorted(largest, key=lambda item: (item[0], item[1]), reverse=True)
     return {
         "total_files": total_files, "total_bytes": total_bytes, "zero_byte_files": zero_bytes,

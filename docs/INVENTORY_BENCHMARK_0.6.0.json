@@ -1,0 +1,60 @@
+{
+  "method": "Same process, alternating order; first pair warm-up excluded; medians of six isolated runs. Local ephemeral Linux fixture; not a Windows/NAS speed claim.",
+  "files_summary": 20000,
+  "summary": {
+    "baseline_seconds": 0.105987,
+    "optimized_seconds": 0.033013,
+    "ratio": 3.21,
+    "runs": 6
+  },
+  "serialization": {
+    "baseline_seconds": 0.066051,
+    "optimized_seconds": 0.00849,
+    "ratio": 7.78,
+    "runs": 6
+  },
+  "record_structure_bytes": {
+    "baseline": 216,
+    "optimized": 128,
+    "scope": "FileEntry object plus instance dictionary only; excludes referenced strings/scalars and enclosing list."
+  },
+  "files_scan": 1500,
+  "scan": {
+    "baseline_seconds": 0.06564,
+    "optimized_seconds": 0.02434,
+    "ratio": 2.7,
+    "runs": 6
+  },
+  "scan_4_patterns": {
+    "baseline_seconds": 0.080746,
+    "optimized_seconds": 0.028581,
+    "ratio": 2.83,
+    "runs": 6
+  },
+  "new_tests": "tests/test_inventory_v1.py: 12 passed; previous tests not rerun",
+  "baseline_commit": "77d072356a8ee80fb99864359b8808d53e56ed67",
+  "application_version": "0.6.0",
+  "environment": {
+    "platform": "Linux cloud container",
+    "python": "3.12.14",
+    "storage": "ephemeral local filesystem, warmed by alternating repeated scans"
+  },
+  "fixture": {
+    "scan": "30 numbered parent folders, one deeper child per parent, 50 one-byte TXT files per child; 1,500 files total",
+    "summary": "20,000 synthetic FileEntry records under Reports/2026/June; logical sizes i % 8192; same metadata fields supplied to both versions",
+    "exclusion_patterns": [
+      "*.tmp",
+      "Cache",
+      "Reports/*/secret*",
+      "*.old"
+    ]
+  },
+  "caveats": [
+    "Measured optimized source was uncommitted while preparing 0.6.0; baseline modules were loaded from the stated commit.",
+    "These are warm local Linux fixture timings, not Windows, NAS, cold-cache, arbitrary-file or whole-application benchmarks.",
+    "Metadata safety reads were retained; asymptotic complete traversal remains linear in visited entries plus path processing and optional sorting.",
+    "FileEntry structure measurements exclude referenced strings/scalars, enclosing containers and allocator overhead.",
+    "The later .folder-organizer-rust exclusion adds a state-directory name; that directory was absent from the measured fixture.",
+    "The twelve previously passed new inventory cases were not rerun for the state-directory exclusion; its one new targeted test passed separately."
+  ]
+}

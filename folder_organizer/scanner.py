@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from fnmatch import fnmatchcase
+from fnmatch import fnmatchcase, translate
 import re
 import stat
 import time
@@ -17,7 +17,7 @@ APPLICATION_SUFFIXES = {
     ".exe", ".msi", ".msix", ".appx", ".dmg", ".pkg", ".deb", ".rpm",
     ".appimage", ".desktop", ".bat", ".cmd", ".com",
 }
-INTERNAL_NAMES = {".folder-organizer", "#recycle", "@recycle", "$recycle.bin"}
+INTERNAL_NAMES = {".folder-organizer", ".folder-organizer-rust", "#recycle", "@recycle", "$recycle.bin"}
 
 
 def normalize_exclude_patterns(patterns: tuple[str, ...] | list[str]) -> tuple[str, ...]:
@@ -38,6 +38,8 @@ def normalize_exclude_patterns(patterns: tuple[str, ...] | list[str]) -> tuple[s
 
 
 def _excluded(relative: Path, patterns: tuple[str, ...]) -> bool:
+    if not patterns:
+        return False
     path = relative.as_posix().casefold()
     for pattern in patterns:
         pattern = pattern.casefold()
@@ -47,6 +49,33 @@ def _excluded(relative: Path, patterns: tuple[str, ...]) -> bool:
         elif fnmatchcase(path, pattern) or fnmatchcase(path + "/", pattern):
             return True
     return False
+
+
+def _compile_exclusions(patterns: tuple[str, ...]) -> Callable[[str, Path], bool]:
+    """Compile scan-local globs once; parents have already passed these rules.
+
+    Component-only patterns need only inspect the new basename: a matching
+    ancestor directory would have been pruned before it entered the pending
+    traversal. Relative-path patterns still inspect the complete relative name.
+    No file metadata or cross-scan result is cached.
+    """
+    names = []
+    paths = []
+    for pattern in patterns:
+        matcher = re.compile(translate(pattern.casefold())).match
+        (paths if "/" in pattern else names).append(matcher)
+
+    def excluded(name: str, relative: Path) -> bool:
+        folded = name.casefold()
+        if any(match(folded) is not None for match in names):
+            return True
+        if paths:
+            folded_path = relative.as_posix().casefold()
+            return any(match(folded_path) is not None or match(folded_path + "/") is not None
+                       for match in paths)
+        return False
+
+    return excluded
 
 
 def _creation_time(info: os.stat_result) -> tuple[float | None, str]:
@@ -87,6 +116,7 @@ def scan_folder(
     for sorting. Progress details are sampled before dictionaries are created.
     """
     patterns = normalize_exclude_patterns(exclude_patterns)
+    excluded = _compile_exclusions(patterns) if patterns else None
     if type(min_size) is not int or min_size < 0 or (max_size is not None and (type(max_size) is not int or max_size < min_size)):
         raise ValueError("파일 크기 범위는 0 이상의 바이트이며 최대값은 최소값 이상이어야 합니다.")
     if type(sort_results) is not bool:
@@ -108,7 +138,8 @@ def scan_folder(
                            "max_size": max_size, "sort_results": sort_results}
     metrics = result.scan_metrics
     metrics.update(visited_entries=0, metadata_reads=1, directories=0,
-                   progress_events=0, sorted_results=sort_results, elapsed_seconds=0.0)
+                   progress_events=0, sorted_results=sort_results, elapsed_seconds=0.0,
+                   exclusion_patterns_compiled=len(patterns))
     total_bytes = 0
     last_progress_time = started
     last_progress_count = -1
@@ -135,13 +166,16 @@ def scan_folder(
 
     report_detail("폴더 안의 파일을 찾고 있습니다. 전체 개수는 탐색이 끝난 뒤 확인됩니다.")
     # Iterative traversal supports deep trees without Python recursion limits.
-    pending = [folder]
+    # Carry the already known relative prefix and application-bundle state.
+    # Recomputing relative_to(root) and walking every ancestor for every file
+    # adds path parsing work, especially on deep Windows/NAS inventories.
+    pending = [(folder, Path(), folder.name.casefold().endswith(".app"))]
     seen_directories: set[tuple[int, int]] = set()
     while pending:
         if cancel is not None and cancel.is_set():
             result.cancelled = True
             break
-        directory = pending.pop()
+        directory, relative_directory, in_app_bundle = pending.pop()
         try:
             metrics["metadata_reads"] += 1
             current = directory.lstat()
@@ -168,9 +202,10 @@ def scan_folder(
                 if cancel is not None and cancel.is_set():
                     result.cancelled = True
                     break
-                if child.name.casefold() in INTERNAL_NAMES:
+                folded_name = child.name.casefold()
+                if folded_name in INTERNAL_NAMES:
                     continue
-                if directory == folder and child.name.casefold() == "delete_files":
+                if directory == folder and folded_name == "delete_files":
                     # App deletion storage is never another set of candidates.
                     continue
                 if not include_hidden and child.name.startswith("."):
@@ -190,12 +225,13 @@ def scan_folder(
                         & getattr(stat, "FILE_ATTRIBUTE_HIDDEN", 2)
                     ):
                         continue
+                    relative = relative_directory / child.name
                     if stat.S_ISDIR(details.st_mode):
-                        if _excluded(path.relative_to(folder), patterns):
+                        if excluded is not None and excluded(child.name, relative):
                             result.excluded_directories += 1
                             continue
                         if recursive:
-                            pending.append(path)
+                            pending.append((path, relative, in_app_bundle or folded_name.endswith(".app")))
                         continue
                     if not stat.S_ISREG(details.st_mode):
                         result.warnings.append(f"Skipped non-regular file: {path}")
@@ -209,15 +245,14 @@ def scan_folder(
                         if not stat.S_ISREG(details.st_mode) or getattr(details, "st_file_attributes", 0) & 0x400:
                             result.warnings.append(f"Skipped changed or linked file: {path}")
                             continue
-                    relative = path.relative_to(folder)
-                    if _excluded(relative, patterns) or details.st_size < min_size or (max_size is not None and details.st_size > max_size):
+                    if ((excluded is not None and excluded(child.name, relative)) or details.st_size < min_size
+                            or (max_size is not None and details.st_size > max_size)):
                         result.filtered_files += 1
                         continue
                     created, source = _creation_time(details)
                     suffix = path.suffix.casefold()
-                    in_app_bundle = folder.name.casefold().endswith(".app") or any(part.casefold().endswith(".app") for part in relative.parts[:-1])
                     result.files.append(FileEntry(
-                        path=str(path), relative_path=str(relative), name=path.name,
+                        path=str(path), relative_path=str(relative), name=child.name,
                         size=details.st_size, modified=details.st_mtime,
                         created=created, created_source=source,
                         kind="application" if suffix in APPLICATION_SUFFIXES or in_app_bundle else "file",

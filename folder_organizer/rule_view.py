@@ -118,7 +118,7 @@ class ClassificationDialog(QDialog):
         presets.addWidget(QLabel("추천 규칙"))
         self.preset_combo = QComboBox()
         self.preset_combo.addItem("추천 규칙 선택", None)
-        presets_data = (("종류별 · 사진/문서/…", "type"), ("수정 연도·월별", "date"),
+        presets_data = (("종류별 · 사진/문서/…", "type"), ("확장자별", "extension"), ("수정 연도·월별", "date"),
                         ("수정 날짜별", "daily"), ("생성 연도·월별", "created_date"),
                         ("수정 분기별", "quarter"), ("규칙 이름·종류별", "rule"),
                         ("기존 폴더 구조 유지", "folder"))

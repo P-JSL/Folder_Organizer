@@ -69,6 +69,7 @@ _TYPES = {
 def default_rules(preset: str = "type") -> list[dict]:
     presets = {
         "type": ("파일 종류별 분류", "{type}/{source_folder}"),
+        "extension": ("확장자별 분류", "{ext}/{source_folder}"),
         "date": ("수정 연도·월별 분류", "{year}/{month}/{source_folder}"),
         "folder": ("기존 폴더 구조 보존", "폴더별/{source_folder}"),
         "daily": ("수정 날짜별 분류", "{date}/{source_folder}"),
@@ -444,7 +445,7 @@ def build_duplicate_plan(scan: ScanResult, groups: list[MatchGroup], *,
         plan = ops.build_routed_plan(scan.root, [], progress_detail=progress_detail)
     plan["mode"] = "duplicate_auto"
     plan["preserve_first"] = preserve_first
-    plan["destination"] = str(Path(scan.root) / ops.STATE_DIRECTORY / "quarantine" / plan["id"])
+    plan["destination"] = str(Path(scan.root) / DELETE_DIRECTORY)
     plan["decisions"] = choice["decisions"]
     plan["warnings"].extend(warnings + choice["warnings"])
     items = {item["source"]: item for item in plan["items"]}

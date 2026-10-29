@@ -1049,12 +1049,18 @@ def compaction_preview(root: str | Path, operation_id: str, *, progress_detail=N
     return plan
 
 
-def _remove_verified_private(path: Path, fingerprint: dict) -> int:
+def _remove_verified_private(path: Path, fingerprint: dict, *, compaction: bool = False) -> int:
     """Retire an exclusively captured app-owned raw copy after verification."""
     _verify(path, fingerprint)
     info = path.lstat()
     with _directory_descriptor(path.parent) as parent:
         _safe_path(path, require=True)
+        if compaction:
+            # Only this optional byte-only optimization retires the original.
+            # Recheck on the captured name immediately before removal; ordinary
+            # delete/undo paths continue moving the complete original file.
+            from . import recovery_payload
+            recovery_payload.compaction_preflight(path)
         if parent is not None:
             os.unlink(path.name, dir_fd=parent)
         else:
@@ -1139,7 +1145,7 @@ def compact_operation(root: str | Path, operation_id: str, *, plan: dict | None 
                     item[field + "_compaction"]["state"] = "retire_pending"
                     _write_journal(journal_path, journal, key)
                     recovery_payload.verify_payload(directory, descriptor)
-                    credited_bytes += _remove_verified_private(holding, fingerprint)
+                    credited_bytes += _remove_verified_private(holding, fingerprint, compaction=True)
                     captured = False
                     item[field + "_compaction"]["state"] = "packed"
                     summary["processed"] += 1
@@ -1151,6 +1157,16 @@ def compact_operation(root: str | Path, operation_id: str, *, plan: dict | None 
                     if captured:
                         _return_retained(holding, source)
                     item[field + "_packed"] = False
+                    if isinstance(exc, recovery_payload.PayloadMetadataUnsupported):
+                        # Chunks contain only the unnamed stream. Even if they
+                        # were already published, they must never become an
+                        # active fallback that silently drops ADS/EFS later.
+                        # Raw data (including an unreturned capture) remains
+                        # referenced by this signed receipt; objects are kept.
+                        item.pop(field + "_payload", None)
+                        retained = item.setdefault(field + "_compaction", {})
+                        retained.update(state="raw_metadata_retained", raw_path=str(source),
+                                        metadata_warning=str(exc))
                     summary["skipped"] += 1
                     summary["warnings"].append(f"보관본 유지: {source} · {exc}")
                     _execution_event("execution.item", execution_id=operation_id, action="compact", status="unchanged",

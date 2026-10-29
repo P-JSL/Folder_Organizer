@@ -1,0 +1,54 @@
+[package]
+name = "folder-organizer-rust"
+version = "0.6.0"
+edition = "2021"
+rust-version = "1.99"
+publish = false
+description = "Native Rust edition of Folder Organizer"
+
+[lib]
+name = "folder_organizer_rust"
+path = "src/lib.rs"
+
+[[bin]]
+name = "FolderOrganizerRust"
+path = "src/main.rs"
+required-features = ["gui"]
+
+[[bin]]
+name = "FolderOrganizerRustCLI"
+path = "src/bin/cli.rs"
+
+[[bin]]
+name = "FolderOrganizerRustUpdater"
+path = "src/bin/updater.rs"
+
+[features]
+default = []
+gui = ["dep:eframe", "dep:egui_extras", "dep:rfd"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["arbitrary_precision"] }
+sha2 = "0.10"
+hmac = "0.12"
+getrandom = "0.2"
+flate2 = "1.0"
+crc32fast = "1.4"
+chrono = { version = "0.4", features = ["serde"] }
+csv = "1.3"
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "tiff", "webp", "ico"] }
+lopdf = "0.35"
+quick-xml = "0.37"
+ureq = { version = "2.12", default-features = false, features = ["native-tls", "proxy-from-env"] }
+native-tls = "0.2"
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"], optional = true }
+egui_extras = { version = "0.31", optional = true }
+rfd = { version = "0.15", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Threading"] }

@@ -23,6 +23,7 @@ MAX_FILE_BYTES = CHUNK_SIZE * MAX_CHUNKS
 MAX_STORED_CHUNK = CHUNK_SIZE + 1024
 FORMAT = "chunked-zlib-v1"
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
+_WINDOWS = os.name == "nt"
 
 
 class PayloadError(ValueError):
@@ -33,8 +34,81 @@ class PayloadNotBeneficial(PayloadError):
     """The requested saving was not achieved; keep the existing raw copy."""
 
 
+class PayloadMetadataUnsupported(PayloadNotBeneficial):
+    """Primary-byte chunks cannot replace the original's Windows properties."""
+
+
 class PayloadLimitError(PayloadError):
     """The size, cancellation or encoding-time budget requires raw fallback."""
+
+
+def _windows_compaction_metadata(path: Path) -> tuple[int, tuple[str, ...]]:
+    """Read attributes and the complete bounded stream list; never change data.
+
+    Stream enumeration support varies on remote/file-system providers. Unknown,
+    denied or incomplete enumeration is an error rather than evidence that no
+    alternate streams exist.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    class StreamData(ctypes.Structure):
+        _fields_ = [("size", ctypes.c_longlong), ("name", wintypes.WCHAR * 296)]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    attributes = kernel.GetFileAttributesW
+    attributes.argtypes, attributes.restype = [wintypes.LPCWSTR], wintypes.DWORD
+    first = kernel.FindFirstStreamW
+    first.argtypes, first.restype = [wintypes.LPCWSTR, ctypes.c_int, ctypes.POINTER(StreamData), wintypes.DWORD], wintypes.HANDLE
+    following = kernel.FindNextStreamW
+    following.argtypes, following.restype = [wintypes.HANDLE, ctypes.POINTER(StreamData)], wintypes.BOOL
+    close = kernel.FindClose
+    close.argtypes, close.restype = [wintypes.HANDLE], wintypes.BOOL
+    value = attributes(str(path))
+    if value == 0xFFFFFFFF:
+        raise ctypes.WinError(ctypes.get_last_error())
+    if value & 0x4000:  # FILE_ATTRIBUTE_ENCRYPTED: plaintext packing drops EFS.
+        return value, ()
+    info = StreamData()
+    handle = first(str(path), 0, ctypes.byref(info), 0)  # FindStreamInfoStandard
+    if handle == ctypes.c_void_p(-1).value:
+        error = ctypes.get_last_error()
+        if error == 38:  # ERROR_HANDLE_EOF: supported, complete empty listing.
+            return value, ()
+        raise ctypes.WinError(error)
+    names = []
+    try:
+        while True:
+            names.append(info.name)
+            if len(names) > 128:
+                raise OSError("데이터 스트림 수가 안전한 확인 한도를 넘었습니다.")
+            if not following(handle, ctypes.byref(info)):
+                error = ctypes.get_last_error()
+                if error != 38:
+                    raise ctypes.WinError(error)
+                break
+    finally:
+        close(handle)
+    return value, tuple(names)
+
+
+def compaction_preflight(path: Path) -> None:
+    """Keep raw Windows files when their metadata cannot fit this byte format.
+
+    The current chunk format carries primary bytes, not EFS encryption or named
+    streams. Deletion/undo still moves the original file; only optional data
+    compaction must refuse to retire these unrepresented properties.
+    """
+    if not _WINDOWS:
+        return
+    try:
+        attributes, streams = _windows_compaction_metadata(Path(path))
+    except (OSError, AttributeError, TypeError, ValueError) as exc:
+        raise PayloadMetadataUnsupported("Windows 데이터 스트림을 완전히 확인할 수 없어 기존 보관본을 유지합니다.") from exc
+    if attributes & 0x4000:
+        raise PayloadMetadataUnsupported("EFS 암호화 파일의 속성을 보존하기 위해 기존 보관본을 유지합니다.")
+    if any(name != "::$DATA" for name in streams):
+        raise PayloadMetadataUnsupported("대체 데이터 스트림(ADS)을 보존하기 위해 기존 보관본을 유지합니다.")
 
 
 def _ops():
@@ -241,6 +315,7 @@ def pack_file(root, path, expected, *, progress_detail=None, cancel=None,
         raise PayloadError("원본 검증 정보가 올바르지 않습니다.")
     if type(expected["size"]) is not int or not 0 <= expected["size"] <= MAX_FILE_BYTES:
         raise PayloadLimitError("파일당 64 GiB까지 복원 데이터를 최적화할 수 있습니다.")
+    compaction_preflight(source)
     state = ops._state(directory)
     key = ops._key(state)
     started, chunks, positions, unique = time.monotonic(), [], {}, {}
@@ -287,6 +362,9 @@ def pack_file(root, path, expected, *, progress_detail=None, cancel=None,
                 raise PayloadError("압축 중 복원용 원본이 변경되었습니다. 기존 보관본은 유지합니다.")
             _same_open_file(source, after)
             _check(cancel, started, time_budget)
+            # A stream/encryption property can appear after the initial probe.
+            # Refuse before publishing any of this file's encoded objects.
+            compaction_preflight(source)
             stored_total = sum(chunk["stored_size"] for chunk in unique.values())
             new_estimate = sum(chunk["stored_size"] for hash_, chunk in unique.items() if positions[hash_] is not None)
             if processed and min_savings_ratio and new_estimate > processed * (1 - min_savings_ratio):

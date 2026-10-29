@@ -1,0 +1,31 @@
+{
+  "baseline_commit": "77d072356a8ee80fb99864359b8808d53e56ed67",
+  "environment": "Local Linux execution workspace, Python 3.12",
+  "statistic": "Median of three runs on new disposable fixtures",
+  "repeated_names": {
+    "files": 70,
+    "distinct_normalized_names": 3,
+    "complete_pairs": 2415,
+    "baseline_seconds": 0.193953,
+    "optimized_seconds": 0.144955,
+    "results_identical": true,
+    "sequence_index_builds": 3,
+    "score_cache_hits": 1627,
+    "identical_name_fast_paths": 782
+  },
+  "metadata_progress": {
+    "entries": 100000,
+    "file_content_reads": 0,
+    "baseline_seconds": 0.222839,
+    "optimized_seconds": 0.187977,
+    "baseline_callback_events": 100005,
+    "optimized_callback_events": 1015,
+    "gui_gated_baseline_seconds": 0.221277,
+    "gui_gated_optimized_seconds": 0.207429
+  },
+  "limits": [
+    "These fixtures isolate repeated-name comparison and progress allocation overhead.",
+    "They do not measure end-to-end duplicate hashing, real Windows/NAS devices or Rust performance.",
+    "Caches are bounded and confined to one analysis; full hash/byte checks and changed-file proofs remain required."
+  ]
+}

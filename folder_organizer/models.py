@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FileEntry:
     path: str
     relative_path: str
@@ -19,7 +19,16 @@ class FileEntry:
     inode: int
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        # Inventory fields are immutable scalars. dataclasses.asdict recursively
+        # visits/deepcopies every value; a flat copy keeps large exports linear
+        # with a much smaller constant without sharing any mutable container.
+        return {
+            "path": self.path, "relative_path": self.relative_path,
+            "name": self.name, "size": self.size, "modified": self.modified,
+            "created": self.created, "created_source": self.created_source,
+            "kind": self.kind, "suffix": self.suffix, "mtime_ns": self.mtime_ns,
+            "device": self.device, "inode": self.inode,
+        }
 
 
 @dataclass

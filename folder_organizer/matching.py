@@ -19,6 +19,7 @@ import secrets
 import stat
 import sys
 import threading
+import time
 import warnings
 from collections import OrderedDict, defaultdict
 from contextlib import contextmanager
@@ -42,6 +43,8 @@ AUTO_COMPLETE_FILE_LIMIT = 256
 INDEX_POSTING_LIMIT = 32
 INDEX_SKETCH_SIZE = 8
 MAX_INDEX_KEYS = 65_536
+NAME_INDEX_CACHE_ENTRIES = 128
+NAME_SCORE_CACHE_ENTRIES = 4096
 _DUPLICATE_PROOF_KEY = secrets.token_bytes(32)
 _DUPLICATE_READS = threading.local()
 
@@ -175,9 +178,38 @@ def _report(progress: Callable[[str], None] | None, message: str) -> None:
         progress(message)
 
 
+class _ProgressDetails:
+    """Sample structured events before allocating their dictionaries.
+
+    Small phases, phase transitions, the known last item and terminal events
+    are always visible. Cancellation is still checked in every processing loop;
+    it does not depend on this display/reporting frequency.
+    """
+    def __init__(self, callback):
+        self.callback = callback
+        self.phase = None
+        self.completed = 0
+        self.last_report = 0.0
+
+
+def _sampled_progress(callback):
+    if callback is None or isinstance(callback, _ProgressDetails):
+        return callback
+    return _ProgressDetails(callback)
+
+
 def _detail(callback: Callable[[dict], None] | None, phase: str, completed: int,
             total: int | None, unit: str, message: str, *, terminal=False) -> None:
     if callback is not None:
+        if isinstance(callback, _ProgressDetails):
+            # Keep the gate in this existing call instead of adding a second
+            # Python method invocation to every visited file or pair.
+            if (not terminal and phase == callback.phase and completed > 10
+                    and completed != total and completed - callback.completed < 100
+                    and time.monotonic() - callback.last_report < .07):
+                return
+            callback.phase, callback.completed, callback.last_report = phase, completed, time.monotonic()
+            callback = callback.callback
         callback({"phase": phase, "completed": completed, "total": total,
                   "unit": unit, "message": message, "terminal": terminal})
 
@@ -318,6 +350,7 @@ def find_duplicates(
     Cancellation returns an empty result, never an incomplete suggestion list.
     """
     groups: list[MatchGroup] = []
+    progress_detail = _sampled_progress(progress_detail)
     hash_snapshots = {}
     previous_sink = getattr(_DUPLICATE_READS, "sink", None)
     _DUPLICATE_READS.sink = hash_snapshots
@@ -438,6 +471,58 @@ def _normal_name(entry: FileEntry) -> str:
     )
     stem = re.sub(r"\s*\(\d+\)\s*$", "", stem)
     return re.sub(r"[\W_]+", " ", stem, flags=re.UNICODE).strip()
+
+
+class _NameComparisons:
+    """Bounded, per-analysis reuse of pure filename comparisons.
+
+    SequenceMatcher's right-hand index is independent of the left filename.
+    Reusing that index and completed *ordered* scores keeps the original ratio
+    exactly, including its direction-sensitive tie behavior. No file contents,
+    metadata proof or delete authority is cached here.
+    """
+    def __init__(self):
+        self.indexes = OrderedDict()
+        self.scores = OrderedDict()
+        self.identical_names = self.score_hits = self.score_misses = 0
+        self.index_hits = self.index_builds = 0
+
+    def ratio(self, left: str, right: str) -> float:
+        # Truncation is the same bound used by the original comparison path.
+        left, right = left[:1024], right[:1024]
+        if left == right:
+            self.identical_names += 1
+            return 1.0
+        key = left, right
+        if key in self.scores:
+            self.score_hits += 1
+            self.scores.move_to_end(key)
+            return self.scores[key]
+        self.score_misses += 1
+        matcher = self.indexes.get(right)
+        if matcher is None:
+            self.index_builds += 1
+            matcher = SequenceMatcher(None, "", right, autojunk=False)
+            if len(self.indexes) >= NAME_INDEX_CACHE_ENTRIES:
+                self.indexes.popitem(last=False)
+            self.indexes[right] = matcher
+        else:
+            self.index_hits += 1
+            self.indexes.move_to_end(right)
+        matcher.set_seq1(left)
+        value = matcher.ratio()
+        if len(self.scores) >= NAME_SCORE_CACHE_ENTRIES:
+            self.scores.popitem(last=False)
+        self.scores[key] = value
+        return value
+
+    def metrics(self) -> dict:
+        return {"identical_names": self.identical_names, "score_hits": self.score_hits,
+                "score_misses": self.score_misses, "sequence_index_hits": self.index_hits,
+                "sequence_index_builds": self.index_builds, "score_entries": len(self.scores),
+                "sequence_index_entries": len(self.indexes),
+                "max_score_entries": NAME_SCORE_CACHE_ENTRIES,
+                "max_sequence_index_entries": NAME_INDEX_CACHE_ENTRIES}
 
 
 def _read_text(entry: FileEntry, limit: int) -> str | None:
@@ -733,6 +818,8 @@ def find_similar(
         notice(message, warning=skipped, skipped=skipped)
 
     results: list[MatchGroup] = []
+    progress_detail = _sampled_progress(progress_detail)
+    name_comparisons = _NameComparisons()
     features = cache if cache is not None else AnalysisCache()
     initial_hits, initial_misses = features.hits, features.misses
     # Content-only profiles cannot match unrelated formats. Excluding these
@@ -833,7 +920,7 @@ def find_similar(
                 # Limit adversarially long input while preserving the
                 # full path separately in the result. Typical OS names
                 # are much shorter than this bound.
-                metrics["name"] = SequenceMatcher(None, left[:1024], right[:1024], autojunk=False).ratio()
+                metrics["name"] = name_comparisons.ratio(left, right)
             try:
                 if "text" in enabled and first.suffix in TEXT_SUFFIXES and second.suffix in TEXT_SUFFIXES:
                     a = features.get(first, f"text:{max_text_bytes}", lambda entry: _text_signature(entry, max_text_bytes), tokens=content_tokens)
@@ -925,6 +1012,7 @@ def find_similar(
         _detail(progress_detail, "similar_cancelled", summary["compared_pairs"], None, "pairs", "유사 비교를 중단했습니다.", terminal=True)
         return []
     finally:
+        summary["name_comparison_cache"] = name_comparisons.metrics()
         if summary["skipped_count"]:
             summary["exhaustive"] = False
         summary["feature_cache"] = {"hits": features.hits - initial_hits, "misses": features.misses - initial_misses,

@@ -719,13 +719,11 @@ class MainWindow(QMainWindow):
         self.organize_menu.addSeparator()
         self.merge_action = self._menu_action(self.organize_menu, "체크한 파일 내용 병합…", self.show_merge, shortcut="Ctrl+M")
         self.merge_action.setToolTip("텍스트·Markdown·CSV·TSV에서 겹치는 내용을 합쳐 새 파일로 만듭니다. 원본 이동은 선택 사항입니다.")
-        manual_menu = self.organize_menu.addMenu("체크한 파일 수동 정리")
+        self.manual_menu = self.organize_menu.addMenu("체크한 파일 수동 정리")
+        manual_menu = self.manual_menu
         for label, mode, basis in (("안전 보관…", "quarantine", "modified"),
                                    ("선택 폴더에 복사…", "copy", "modified"),
-                                   ("선택 폴더로 이동…", "move", "modified"),
-                                   ("수정일별 폴더로 정리…", "date", "modified"),
-                                   ("생성일별 폴더로 정리…", "date", "created"),
-                                   ("확장자별 폴더로 정리…", "extension", "modified")):
+                                   ("선택 폴더로 이동…", "move", "modified")):
             self._menu_action(manual_menu, label, lambda mode=mode, basis=basis: self._manual_action(mode, basis))
         self.organize_menu.addSeparator()
         self.assume_duplicates_button = self._menu_action(self.organize_menu, "선택 항목을 중복으로 간주…", self.assume_duplicates)
@@ -787,8 +785,16 @@ class MainWindow(QMainWindow):
             action.setChecked(key == self.theme_mode)
 
     def _manual_action(self, mode, basis):
+        # Date and extension classification share the rule editor. Keep legacy
+        # callers working without exposing duplicate, less flexible workflows.
+        if mode in {"date", "extension"}:
+            preset = "created_date" if mode == "date" and basis == "created" else mode
+            self.show_classification(preset=preset)
+            return
         index = next((index for index in range(self.action_combo.count())
-                      if self.action_combo.itemData(index) == (mode, basis)), 0)
+                      if self.action_combo.itemData(index) == (mode, basis)), -1)
+        if index < 0:
+            raise ValueError("지원하지 않는 수동 정리 방식입니다.")
         self.action_combo.setCurrentIndex(index)
         self.preview_selected()
 
@@ -1070,10 +1076,7 @@ class MainWindow(QMainWindow):
         self.action_combo = QComboBox()
         for label, mode, basis in (("삭제 · delete_files로 이동 (복원 가능)", "quarantine", "modified"),
                                    ("선택 폴더에 복사", "copy", "modified"),
-                                   ("선택 폴더로 이동", "move", "modified"),
-                                   ("수정일별 폴더로 정리", "date", "modified"),
-                                   ("생성일별 폴더로 정리", "date", "created"),
-                                   ("확장자별 폴더로 정리", "extension", "modified")):
+                                   ("선택 폴더로 이동", "move", "modified")):
             self.action_combo.addItem(label, (mode, basis))
         self.action_combo.currentIndexChanged.connect(self._refresh_action_hint)
         actions.addWidget(self.action_combo, 1)
@@ -2140,10 +2143,10 @@ class MainWindow(QMainWindow):
             log_event("rules.settings_invalid", "저장된 분류 규칙을 읽지 못해 기본 규칙을 사용합니다", level="WARNING")
         return default_rules("type")
 
-    def show_classification(self):
+    def show_classification(self, *, preset=None):
         if not self._require_scan():
             return
-        dialog = ClassificationDialog(self._classification_rules(), self)
+        dialog = ClassificationDialog(default_rules(preset) if preset else self._classification_rules(), self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         values = dialog.values

@@ -2,7 +2,9 @@
 
 Windows에서 **내 컴퓨터의 폴더**를 선택해 파일을 살펴보고, 변경 내역을 미리 확인한 후 안전하게 정리하는 데스크톱 앱입니다. 파일은 외부 서버에 업로드하지 않습니다.
 
-현재 안정판은 **v0.5.0**입니다. 중복 검사 결과를 재사용하는 즉시 정리, `delete_files` 보관, 복원 데이터 압축과 큰 목록의 조회·분석 개선을 포함합니다. 자동 업데이트가 켜진 Windows 배포 앱에서도 이 버전을 확인할 수 있습니다.
+**v0.6.0은 Python판과 Rust판을 각각 정식 Windows ZIP으로 제공합니다.** 기존 Python판의 처리 비용을 줄이고, 같은 기능 영역을 별도로 구현한 Rust판을 추가했습니다. 정식 1.0.0으로 표시하기 전에 충족할 기준은 [조사·완료 기준](docs/V1_READINESS.md), 두 판의 구성과 지원 경계는 [Python·Rust 안내](docs/EDITIONS_0.6.0.md), 통합한 메뉴는 [기능 정리 결정](docs/FEATURE_DECISIONS.md)에 정리했습니다. 이미 통과한 검사는 반복하지 않습니다.
+
+현재 안정판은 **v0.6.0**입니다. 중복 검사 결과를 재사용하는 즉시 정리, `delete_files` 보관, 복원 데이터 압축과 큰 목록의 조회·분석 개선을 포함합니다. 각 판의 자동 업데이트는 자기 판의 패키지만 확인합니다.
 
 | 다크 모드 · 기본 | 라이트 모드 |
 | --- | --- |
@@ -12,8 +14,8 @@ Windows에서 **내 컴퓨터의 폴더**를 선택해 파일을 살펴보고, �
 
 ## Windows에서 사용
 
-1. [공개 안정판 Windows ZIP](https://github.com/P-JSL/Folder_Organizer/releases/latest/download/FolderOrganizer-Windows-x64.zip)을 다운로드합니다. 현재 안정판은 v0.5.0입니다. 버전별 변경 사항과 체크섬은 [Releases](https://github.com/P-JSL/Folder_Organizer/releases)에서 확인할 수 있습니다.
-2. ZIP 전체를 압축 해제한 뒤 `FolderOrganizer/FolderOrganizer.exe`를 실행합니다. `_internal` 폴더도 함께 보관해야 합니다.
+1. [Python판 Windows ZIP](https://github.com/P-JSL/Folder_Organizer/releases/latest/download/FolderOrganizer-Windows-x64.zip) 또는 [Rust판 Windows ZIP](https://github.com/P-JSL/Folder_Organizer/releases/latest/download/FolderOrganizer-Rust-Windows-x64.zip)을 다운로드합니다. 버전별 변경 사항과 체크섬은 [Releases](https://github.com/P-JSL/Folder_Organizer/releases)에서 확인할 수 있습니다.
+2. ZIP 전체를 압축 해제한 뒤 Python은 `FolderOrganizer/FolderOrganizer.exe`, Rust는 `FolderOrganizerRust/FolderOrganizerRust.exe`를 실행합니다. 각 ZIP의 도우미·라이선스 파일과 Python의 `_internal` 폴더도 함께 보관해야 합니다.
 3. **폴더 선택 → 분석**으로 시작합니다. 우선 작은 테스트 폴더에서 미리보기와 되돌리기를 확인하세요.
 
 Windows 배포판은 Windows 10/11 x64를 대상으로 하며 **Python 설치가 필요 없습니다**. 소스 실행에는 Python 3.11 이상이 필요합니다. 실행 파일은 코드 서명되지 않아 Windows에서 게시자 확인 알림을 표시할 수 있습니다. Windows·Linux CI에서 검증하며 실행 파일은 Windows 러너에서 빌드합니다. macOS는 소스 실행 구조를 갖추었지만 별도 패키지나 실기기 검증을 제공하지 않습니다.
@@ -36,7 +38,7 @@ Windows 배포판은 Windows 10/11 x64를 대상으로 하며 **Python 설치가
 | 중복 자동 정리 | 검증된 중복의 보존 원본을 남기고 사본을 안전 보관; 실행 전과 실행 중 원본 재검증 |
 | 첫 번째 제외 삭제 | 현재 검증 결과를 재사용해 추가 전체 검사·확인 없이 첫 파일과 보호 대상만 남기고 나머지를 `delete_files`로 이동; 기록에서 복원 |
 | 검사 설정 | 전체·사진·문서·이름 비교 프리셋, 개별 기준값, 제외 경로 패턴·크기 범위, 로컬 설정 저장 |
-| 날짜·확장자 정리 | 미리보기 후 선택 파일을 연월별 또는 확장자별 폴더로 이동 |
+| 날짜·확장자 정리 | 공통 규칙 화면에서 날짜·확장자 추천 규칙과 대상 경로를 설정하고, 조건에 맞는 분석 파일을 미리보기 후 복사·이동 |
 | 복사·이동 | 사용자가 선택한 대상 폴더, 이름 충돌 시 별도 이름, 복사 검증 후 이동 |
 | 내용 병합 | UTF-8 텍스트·Markdown의 같은 문단, CSV·TSV의 같은 행을 정리한 새 병합본 생성; 원본 유지 기본값, 병합 후 원본 안전 보관 선택 가능 |
 | 선택 항목을 중복으로 간주 | 중복 검증 없이 사용자가 선택한 파일을 `delete_files`로 보내는 **별도 메뉴 동작**과 확인 절차 |
