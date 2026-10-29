@@ -5,8 +5,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import zipfile
+
+from build_python_distribution import package_layout
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,13 +41,15 @@ def main() -> None:
     versions = {package["version"] for package in packages.values()}
     if len(versions) != 1:
         raise ValueError("Both release editions must have the same version")
+    signing = json.loads((ROOT / "dist/WINDOWS_SIGNING_STATUS.json").read_text(encoding="utf-8-sig"))
     manifest = {"source_commit": os.environ["GITHUB_SHA"], "workflow_run": os.environ["GITHUB_RUN_ID"],
                 "version": versions.pop(), "packages": packages,
-                "authenticode": "not configured; no signing certificate supplied to this build",
+                "authenticode": signing,
                 "verification_scope": "new changed-path checks only; previously passed cases are not rerun"}
     (output / "BUILD_INFO.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     (output / "SHA256SUMS.txt").write_text("".join(f"{value['sha256']}  {name}\n" for name, value in packages.items()), encoding="utf-8")
-    shutil.copyfile(ROOT / "dist/PYTHON_PACKAGE_LAYOUT.json", output / "PYTHON_PACKAGE_LAYOUT.json")
+    (output / "PYTHON_PACKAGE_LAYOUT.json").write_text(
+        json.dumps(package_layout(ROOT / "dist/FolderOrganizer"), indent=2) + "\n", encoding="utf-8")
     print(json.dumps(manifest))
 
 

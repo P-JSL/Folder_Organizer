@@ -35,6 +35,8 @@ def main() -> None:
         archive.write(source / "PYTHON_PACKAGE_LAYOUT.json", "PYTHON_PACKAGE_LAYOUT.json")
     body = (ROOT / f"docs/RELEASE_NOTES_{version}.md").read_text(encoding="utf-8")
     body += f"\n정식 빌드 소스: `{commit}`. 변경 경로의 새 Windows 검사·실제 패키지 실행·같은 입력 비교 자료는 `VALIDATION_RESULTS.zip`에 포함합니다.\n"
+    signing = manifest["authenticode"]
+    body += f"\n실제 실행 파일 서명 모드: `{signing['mode']}`. 공인 신뢰 검증 완료: `{str(signing['public_trust_verified']).lower()}`. 자체 서명은 공인 게시자 인증을 의미하지 않습니다.\n"
     body += "\n| 실제 배포본 | ZIP 바이트 | 비압축 바이트 | 파일 수 |\n| --- | ---: | ---: | ---: |\n"
     for name, package in manifest["packages"].items():
         body += f"| {package['directory']} | {package['zip_bytes']:,} | {package['unpacked_bytes']:,} | {package['files']:,} |\n"

@@ -59,6 +59,7 @@ GitHub 저장소 → **Settings → Secrets and variables → Actions**:
 
 | 워크플로 | EXE 처리 | 서명 적용 시점 |
 | --- | --- | --- |
+| `review-release.yml` | Python 2 + Rust 3 (v0.7.0) | ZIP·체크섬 생성 전, 실제 서명 상태는 외부 `BUILD_INFO.json`에 기록 |
 | `dual-release.yml` | Python 2 + Rust 3 | 각 실행 파일을 빌드·패키지 디렉터리에 배치한 뒤, ZIP 전 |
 | `version-release.yml` | Python 2 + Rust 3 | `package_version_release.py`의 ZIP 전 |
 | `rust-hotfix.yml` | Rust 3 | `windows_rust_hotfix_v6.py package` 전 |
