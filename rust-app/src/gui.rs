@@ -214,8 +214,8 @@ struct Comparison {
     textures: Vec<Option<egui::TextureHandle>>,
 }
 enum ResultData {
-    Scan(ScanResult),
-    Duplicates(Vec<DuplicateGroup>),
+    Scan(ScanResult, ScanOptions),
+    Duplicates(core::DuplicateAnalysis),
     Similar(similarity::SimilarAnalysis),
     Plan(OperationPlan),
     Receipt(OperationReceipt, bool),
@@ -259,6 +259,8 @@ pub struct OrganizerApp {
     selection_bytes_dirty: bool,
     duplicate_rows: Vec<DuplicateRow>,
     duplicates: Vec<DuplicateGroup>,
+    duplicate_details: Option<core::DuplicateAnalysis>,
+    scan_options: ScanOptions,
     similar: Option<similarity::SimilarAnalysis>,
     view: View,
     groups_actionable: bool,
@@ -324,6 +326,8 @@ impl OrganizerApp {
             selection_bytes_dirty: true,
             duplicate_rows: vec![],
             duplicates: vec![],
+            duplicate_details: None,
+            scan_options: ScanOptions::default(),
             similar: None,
             view: View::Files,
             groups_actionable: false,
@@ -454,7 +458,8 @@ impl OrganizerApp {
     }
     fn finish(&mut self, data: ResultData) {
         match data {
-            ResultData::Scan(scan) => {
+            ResultData::Scan(scan, options) => {
+                self.scan_options = options;
                 self.root = Some(scan.root.clone());
                 self.settings.recent.retain(|path| path != &scan.root);
                 self.settings.recent.insert(0, scan.root.clone());
@@ -474,17 +479,27 @@ impl OrganizerApp {
                 self.scan = Some(Arc::new(scan));
                 self.selected.clear();
                 self.duplicates.clear();
+                self.duplicate_details = None;
                 self.similar = None;
                 self.groups_actionable = false;
                 self.view = View::Files;
                 self.rebuild_rows();
             }
-            ResultData::Duplicates(groups) => {
+            ResultData::Duplicates(mut analysis) => {
                 self.status = format!(
-                    "완전 중복 {}그룹 · 전체 SHA-256과 실제 바이트 검증 완료",
-                    groups.len()
+                    "완전 중복 {}그룹 · 전체 SHA-256과 실제 바이트 검증{} · 읽은 샘플 {} · 전체 해시 {}개",
+                    analysis.groups.len(),
+                    if analysis.complete { " 완료" } else { " · 일부 파일 미검사" },
+                    bytes_text(analysis.metrics.sample_bytes), analysis.metrics.full_hash_files
                 );
-                self.duplicates = groups;
+                if !analysis.complete {
+                    self.note(format!("중복 검사 일부 미완료: 주의 {}건. 확인된 그룹만 표시하며 전체 폴더의 중복 없음 판정이 아닙니다.", analysis.warning_count));
+                    for warning in analysis.warnings.iter().take(20) {
+                        self.note(format!("{}: {}", warning.path.display(), warning.message));
+                    }
+                }
+                self.duplicates = std::mem::take(&mut analysis.groups);
+                self.duplicate_details = Some(analysis);
                 self.rebuild_duplicate_rows();
                 self.groups_actionable = true;
                 self.view = View::Duplicates;
@@ -526,6 +541,7 @@ impl OrganizerApp {
             ResultData::MergePreview(preview) => self.merge = Some(preview),
             ResultData::Receipt(receipt, restore) => {
                 self.groups_actionable = false;
+                self.duplicate_details = None;
                 let removed: HashSet<_> = receipt
                     .items
                     .iter()
@@ -729,7 +745,8 @@ impl OrganizerApp {
         let options = self.settings.scan.clone();
         self.root = Some(root.clone());
         self.start(context, "폴더 분석", move |cancel, progress| {
-            core::scan(&root, &options, cancel, Some(progress)).map(ResultData::Scan)
+            core::scan(&root, &options, cancel, Some(progress))
+                .map(|scan| ResultData::Scan(scan, options))
         });
     }
     fn checked_paths(&self) -> Vec<PathBuf> {
@@ -761,7 +778,7 @@ impl OrganizerApp {
             return;
         };
         self.start(context, "완전 중복 검사", move |cancel, progress| {
-            core::find_duplicates(&scan, cancel, Some(progress)).map(ResultData::Duplicates)
+            core::analyze_duplicates(&scan, cancel, Some(progress)).map(ResultData::Duplicates)
         });
     }
     fn analyze_similar(&mut self, context: &egui::Context) {
@@ -771,13 +788,31 @@ impl OrganizerApp {
         };
         let options = self.settings.similar.clone();
         let groups = self.groups_actionable.then(|| self.duplicates.clone());
+        let duplicate_warnings = self
+            .duplicate_details
+            .as_ref()
+            .filter(|value| !value.complete)
+            .map(|value| value.warnings.clone())
+            .unwrap_or_default();
         self.start(context, "유사 후보 비교", move |cancel, progress| {
-            if let Some(groups) = groups {
+            let mut report = if let Some(groups) = groups {
                 similarity::find_similar_excluding(&scan, &options, &groups, cancel, Some(progress))
             } else {
                 similarity::find_similar(&scan, &options, cancel, Some(progress))
+            }?;
+            if !duplicate_warnings.is_empty() {
+                report.complete = false;
+                report
+                    .warnings
+                    .extend(duplicate_warnings.iter().take(20).map(|value| {
+                        format!(
+                            "중복 제외 검사 일부 미완료: {}: {}",
+                            value.path.display(),
+                            value.message
+                        )
+                    }));
             }
-            .map(ResultData::Similar)
+            Ok(ResultData::Similar(report))
         });
     }
     fn keep_first(&mut self, context: &egui::Context) {
@@ -918,12 +953,33 @@ impl OrganizerApp {
             return;
         };
         let duplicates = self.duplicates.clone();
+        let options = self.scan_options.clone();
+        let analysis = self
+            .duplicate_details
+            .clone()
+            .filter(|_| self.groups_actionable)
+            .map(|mut value| {
+                value.groups = duplicates;
+                value
+            });
         let similar = self.similar.clone();
         self.start(context, "분석 보고서 저장", move |_, _| {
             match format.as_str() {
                 "csv" => reporting::export_csv(&scan, &path)?,
-                "html" => reporting::export_html(&scan, &duplicates, &similar, &path)?,
-                _ => reporting::export_json(&scan, &duplicates, &similar, &path)?,
+                "html" => reporting::export_analysis_html(
+                    &scan,
+                    &options,
+                    analysis.as_ref(),
+                    &similar,
+                    &path,
+                )?,
+                _ => reporting::export_analysis_json(
+                    &scan,
+                    &options,
+                    analysis.as_ref(),
+                    &similar,
+                    &path,
+                )?,
             }
             Ok(ResultData::Message(format!(
                 "보고서 저장 완료: {}",
@@ -2578,7 +2634,11 @@ fn desktop_renderer_options() -> (eframe::Renderer, eframe::egui_wgpu::WgpuConfi
     // enumerates WARP as a CPU adapter, so retain it after compatible GPUs.
     setup.instance_descriptor.backends = wgpu::Backends::DX12;
     // FXC is supplied by Windows; the portable ZIP needs no DXC sidecar DLLs.
-    setup.instance_descriptor.backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::Fxc;
+    setup
+        .instance_descriptor
+        .backend_options
+        .dx12
+        .shader_compiler = wgpu::Dx12Compiler::Fxc;
     let device_descriptor = setup.device_descriptor.clone();
     setup.native_adapter_selector = Some(Arc::new(move |adapters, surface| {
         let chosen = adapters

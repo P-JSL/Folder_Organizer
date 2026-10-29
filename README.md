@@ -4,9 +4,9 @@ Windows에서 **내 컴퓨터의 폴더**를 선택해 파일을 살펴보고, �
 
 **이용 권한: 권리자 P-JSL 본인과 권리자가 명시적으로 서면 허락한 사람만 사용할 수 있습니다.** 공개 저장소·다운로드 가능 여부는 사용·상업적 이용·재배포 허락이 아닙니다. [LICENSE](LICENSE) · [이용약관](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/TERMS_OF_USE.md) · [개인정보·로컬 데이터 안내](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/PRIVACY.md) · [이용허락 요청](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/PERMISSION_REQUEST.md)을 확인하세요. ZIP에는 앱 폴더의 `LICENSE`와 `licenses/FolderOrganizer/`에 관련 문서가 포함됩니다. 제3자 라이선스와 기존 적법한 권리는 유지합니다.
 
-**v0.6.1은 Python판과 Rust판을 각각 정식 Windows ZIP으로 제공합니다.** 기존에 통과한 Python 구현과 Rust 수정본의 기능을 유지하고, 두 판의 버전과 릴리즈 정보를 0.6.1로 맞췄습니다. 정식 1.0.0으로 표시하기 전에 충족할 기준은 [조사·완료 기준](docs/V1_READINESS.md), 두 판의 구성과 지원 경계는 [Python·Rust 안내](docs/EDITIONS_0.6.0.md), 통합한 메뉴는 [기능 정리 결정](docs/FEATURE_DECISIONS.md)에 정리했습니다. 사용자 지시에 따라 이번 릴리즈에서 기존 검사와 앱 실행 검사를 반복하지 않습니다.
+**v0.7.0은 비교 보고서의 지적을 코드와 대조하여 반영한 Python·Rust Windows 배포판입니다.** Rust의 대형 파일 샘플 선별, 내용 기반 유사 후보, 부분 오류 표시와 CLI 선택지를 개선하고 두 판의 공통 보고서 형식을 추가했습니다. [보고서 항목별 검토](docs/REPORT_REVIEW_0.7.0.md)에서 확인·수정·보류의 근거를 구분합니다. 수정하지 않은 기능과 기존 통과 검사는 반복하지 않습니다. 정식 1.0.0의 [완료 기준](docs/V1_READINESS.md)과 두 판의 [지원 경계](docs/EDITIONS_0.6.0.md)도 유지합니다.
 
-현재 안정판은 **v0.6.1**입니다. 중복 검사 결과를 재사용하는 즉시 정리, `delete_files` 보관, 복원 데이터 압축과 큰 목록의 조회·분석 개선을 포함합니다. 각 판의 자동 업데이트는 자기 판의 패키지만 확인합니다.
+현재 안정판은 **v0.7.0**입니다. 중복 검사 결과를 재사용하는 즉시 정리, `delete_files` 보관, 복원 데이터 압축과 큰 목록의 조회·분석 개선을 포함합니다. 각 판의 자동 업데이트는 자기 판의 패키지만 확인합니다.
 
 | 다크 모드 · 기본 | 라이트 모드 |
 | --- | --- |

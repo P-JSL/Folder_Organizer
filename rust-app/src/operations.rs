@@ -2013,12 +2013,43 @@ fn resolve_captured(
     }
     Ok(current)
 }
+
+/// A copy's published target must originate from its verified staging file.
+/// The original source identity is valid for raw recovery after a rename, but
+/// never proves that an unrelated target belongs to a cancelled copy/move.
+fn resolve_published_copy(
+    item: &JournalItem,
+    path: &Path,
+    cancel: &AtomicBool,
+) -> AppResult<FileSnapshot> {
+    if let Some(captured) = &item.captured {
+        return resolve_captured(item, path, Some(captured), cancel);
+    }
+    let staged = item
+        .staged_snapshot
+        .as_ref()
+        .ok_or("복사본 게시 정보가 없어 대상 파일을 변경하지 않습니다.")?;
+    let current = core::snapshot(path)?;
+    if !same_file(&current, staged) || item.receipt.sha256.is_none() {
+        return Err("작업에서 게시한 복사본이 아닙니다. 대상 파일을 유지합니다.".into());
+    }
+    // An interrupted publication may leave only the pre-rename staging
+    // snapshot. Rename changes ChangeTime, so verify its stable identity,
+    // primary content and current snapshot instead of accepting source aliases.
+    resolve_captured(item, path, None, cancel)
+}
+
 fn retire_published_target(store: &mut Store, index: usize, cancel: &AtomicBool) -> AppResult<()> {
     let mut item = store.journal.items[index].clone();
+    if item.captured.is_none() && item.staged_snapshot.is_none() {
+        // No durable publication intent was reached. A subsequently created
+        // target belongs to the user, even if it is a hardlink to the source.
+        return Ok(());
+    }
     if !item.receipt.target.exists() {
         return Ok(());
     }
-    let current = resolve_captured(&item, &item.receipt.target, item.captured.as_ref(), cancel)?;
+    let current = resolve_published_copy(&item, &item.receipt.target, cancel)?;
     let parent = item
         .receipt
         .target
@@ -2106,7 +2137,7 @@ fn restore_item(store: &mut Store, index: usize, cancel: &AtomicBool) -> AppResu
         return Err("원래 경로에 파일이 있습니다. 덮어쓰지 않습니다.".into());
     }
     if kind == TransferKind::Move && item.receipt.target.exists() {
-        resolve_captured(&item, &item.receipt.target, item.captured.as_ref(), cancel)?;
+        resolve_published_copy(&item, &item.receipt.target, cancel)?;
     }
     let parent = item
         .receipt
@@ -2720,6 +2751,58 @@ pub fn compact(
     result.saved_bytes = result.original_bytes.saturating_sub(result.stored_bytes);
     let _ = store.compress_metadata();
     Ok(result)
+}
+
+#[cfg(test)]
+mod review_v070_unit {
+    use super::*;
+
+    #[test]
+    fn verified_staging_identity_recovers_an_interrupted_copy_publication() {
+        struct Fixture(PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let fixture = Fixture(std::env::temp_dir().join(format!(
+            "organizer-publication-review-v070-{}",
+            random_id().unwrap()
+        )));
+        let root = fixture.0.join("source");
+        let destination = fixture.0.join("destination");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir(&destination).unwrap();
+        let source = root.join("original.txt");
+        fs::write(&source, b"verified publication survives interruption").unwrap();
+        let cancel = AtomicBool::new(false);
+        let scan = core::scan(&root, &core::ScanOptions::default(), &cancel, None).unwrap();
+        let plan = plan_files(
+            &scan,
+            &[source.clone()],
+            Some(&destination),
+            TransferKind::Copy,
+        )
+        .unwrap();
+        let receipt = execute(&plan, &cancel, None).unwrap();
+        assert!(receipt.completed, "{:?}", receipt.errors);
+        // Simulate recovery from the last durable publication-intent record:
+        // the exclusive rename happened but its final checkpoint was lost.
+        let mut store = Store::load(&root_path(&root).unwrap(), &receipt.id).unwrap();
+        let mut item = store.journal.items[0].clone();
+        assert!(item.staged_snapshot.is_some());
+        item.captured = None;
+        item.receipt.status = "publish_intent".into();
+        store.checkpoint(0, item).unwrap();
+        drop(store);
+        let restored = undo(&root, &receipt.id, &cancel, None).unwrap();
+        assert!(restored.completed, "{:?}", restored.errors);
+        assert_eq!(
+            fs::read(&source).unwrap(),
+            b"verified publication survives interruption"
+        );
+        assert!(!receipt.items[0].target.exists());
+    }
 }
 
 #[cfg(all(test, windows))]

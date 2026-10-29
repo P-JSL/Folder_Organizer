@@ -1802,10 +1802,11 @@ class MainWindow(QMainWindow):
             return
         files = list(self.model.entries)
         def task(worker):
-            groups = find_duplicates(files, cancel=worker.cancel_event, progress=worker.report, progress_detail=worker.report_detail)
-            return groups, worker.cancel_event.is_set()
+            report = {}
+            groups = find_duplicates(files, cancel=worker.cancel_event, progress=worker.report, progress_detail=worker.report_detail, report=report)
+            return groups, worker.cancel_event.is_set(), report
         self._start_task("SHA-256과 실제 내용을 비교하고 있습니다…", task,
-                         lambda result: self._load_groups(result[0], "duplicate") if not result[1] else None,
+                         lambda result: self._load_groups(result[0], "duplicate", result[2]) if not result[1] else None,
                          cancellable=True)
 
     def analyze_similar(self):
@@ -1863,6 +1864,8 @@ class MainWindow(QMainWindow):
         notices = [self._update_diagnostic_notice] if self._update_diagnostic_notice else []
         if self.scan_result and self.scan_result.warnings:
             notices.append(f"폴더 분석 주의 {len(self.scan_result.warnings):,}건")
+        if exact and not self.match_report.get("complete", True):
+            notices.append(f"중복 검사 일부 미완료 · 건너뛴 파일 {self.match_report.get('metrics', {}).get('skipped_files', 0):,}개. 확인된 그룹만 표시합니다. 전체 폴더에 중복이 없다는 뜻은 아닙니다.")
         if self.match_report.get("effective_search_mode") == "indexed":
             notices.append("빠른 후보 검색 결과입니다. 모든 파일을 살펴보되 모든 쌍을 비교하지 않아 일부 유사 파일을 놓칠 수 있습니다. 검사 설정에서 전체 쌍 비교를 선택할 수 있습니다.")
         if self.match_report.get("limit_reached"):
@@ -1870,7 +1873,9 @@ class MainWindow(QMainWindow):
         if self.match_report.get("skipped_count"):
             notices.append(f"파일 변경·읽기 제한 등으로 건너뛴 비교 {self.match_report['skipped_count']:,}건. 결과 보고서에서 확인하세요.")
         self.warning_label.setText("\n".join(notices))
-        self.warning_label.setToolTip("\n".join(map(str, self.match_report.get("warnings", []))))
+        self.warning_label.setToolTip("\n".join(
+            f"{value.get('path')}: {value.get('message')}" if isinstance(value, dict) else str(value)
+            for value in self.match_report.get("warnings", [])))
         self.warning_label.setVisible(bool(notices))
         self.match_filter.setVisible(not exact)
         self.retention_rule.setVisible(exact)
@@ -1979,6 +1984,7 @@ class MainWindow(QMainWindow):
                             duplicates=self.groups if self.match_kind == "duplicate" else None,
                             similar=self.groups if self.match_kind == "similar" else None,
                             comparison_report=self.match_report,
+                            duplicate_analysis=self.match_report if self.match_kind == "duplicate" else None,
                             selection={"paths": self.selected_paths(), "retention": self.last_retention})
 
     def export_match_report(self):

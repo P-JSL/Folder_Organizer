@@ -16,3 +16,5 @@ release-promotion/
 *.pfx
 *.p12
 *.pfx.base64.txt
+release-build/
+review-results/

@@ -218,13 +218,22 @@ def _sample_digest(entry: FileEntry, cancel: Event | None) -> str:
     """Reject differing large files cheaply; samples never prove duplication."""
     digest = hashlib.sha256()
     offsets = (0, (entry.size - SAMPLE_BYTES) // 2, entry.size - SAMPLE_BYTES)
+    metrics = getattr(_DUPLICATE_READS, "metrics", None)
     with _open_snapshot(entry) as stream:
+        original = _snapshot_metadata(os.fstat(stream.fileno()))
         for offset in offsets:
             _check_cancel(cancel)
             stream.seek(offset)
-            digest.update(stream.read(SAMPLE_BYTES))
+            chunk = stream.read(SAMPLE_BYTES)
+            if metrics is not None:
+                metrics["sample_bytes"] += len(chunk)
+            digest.update(chunk)
     _check_cancel(cancel)
-    return digest.hexdigest()
+    value = digest.hexdigest()
+    sink = getattr(_DUPLICATE_READS, "sink", None)
+    if sink is not None:
+        sink[entry.path] = {**original, "sample_sha256": value}
+    return value
 
 
 class AnalysisCache:
@@ -300,14 +309,21 @@ class AnalysisCache:
 
 def _digest(entry: FileEntry, cancel: Event | None) -> str:
     digest = hashlib.sha256()
+    metrics = getattr(_DUPLICATE_READS, "metrics", None)
+    sink = getattr(_DUPLICATE_READS, "sink", None)
     with _open_snapshot(entry) as stream:
         original = _snapshot_metadata(os.fstat(stream.fileno()))
+        sampled = sink.get(entry.path) if sink is not None else None
+        if sampled is not None and "sample_sha256" in sampled:
+            if any(original[key] != sampled[key] for key in original):
+                raise OSError("File changed between its sample and full-hash reads; rescan first")
         while chunk := stream.read(CHUNK_SIZE):
+            if metrics is not None:
+                metrics["full_hash_bytes"] += len(chunk)
             _check_cancel(cancel)
             digest.update(chunk)
     _check_cancel(cancel)
     value = digest.hexdigest()
-    sink = getattr(_DUPLICATE_READS, "sink", None)
     if sink is not None:
         sink[entry.path] = {**original, "sha256": value}
     return value
@@ -315,10 +331,13 @@ def _digest(entry: FileEntry, cancel: Event | None) -> str:
 
 def _equal(first: FileEntry, second: FileEntry, cancel: Event | None) -> bool:
     equal = True
+    metrics = getattr(_DUPLICATE_READS, "metrics", None)
     with _open_snapshot(first) as left, _open_snapshot(second) as right:
         while True:
             _check_cancel(cancel)
             a, b = left.read(CHUNK_SIZE), right.read(CHUNK_SIZE)
+            if metrics is not None:
+                metrics["byte_comparison_bytes"] += len(a) + len(b)
             if a != b:
                 equal = False
                 break
@@ -342,6 +361,7 @@ def find_duplicates(
     files: list[FileEntry], cancel: Event | None = None,
     progress: Callable[[str], None] | None = None,
     *, progress_detail: Callable[[dict], None] | None = None,
+    report: dict | None = None,
 ) -> list[MatchGroup]:
     """Return exact duplicate groups; inaccessible or stale snapshots are skipped.
 
@@ -352,8 +372,30 @@ def find_duplicates(
     groups: list[MatchGroup] = []
     progress_detail = _sampled_progress(progress_detail)
     hash_snapshots = {}
+    summary = report if report is not None else {}
+    summary.clear()
+    metrics = {key: 0 for key in ("candidate_files", "sampled_files", "sample_bytes",
+               "full_hash_files", "full_hash_bytes", "byte_comparison_bytes",
+               "hardlink_aliases", "skipped_files")}
+    summary.update(complete=True, cancelled=False, warnings=[], warning_count=0,
+                   warnings_truncated=False, metrics=metrics)
+    skipped_paths = set()
+
+    def skipped(entry: FileEntry, phase: str, error: Exception) -> None:
+        summary["complete"] = False
+        summary["warning_count"] += 1
+        skipped_paths.add(entry.path)
+        metrics["skipped_files"] = len(skipped_paths)
+        if len(summary["warnings"]) < 1000:
+            summary["warnings"].append({"path": entry.path, "phase": phase,
+                                        "message": str(error)[:512]})
+        else:
+            summary["warnings_truncated"] = True
+
     previous_sink = getattr(_DUPLICATE_READS, "sink", None)
+    previous_metrics = getattr(_DUPLICATE_READS, "metrics", None)
     _DUPLICATE_READS.sink = hash_snapshots
+    _DUPLICATE_READS.metrics = metrics
     try:
         _check_cancel(cancel)
         sizes: dict[int, list[FileEntry]] = defaultdict(list)
@@ -365,12 +407,15 @@ def find_duplicates(
             _detail(progress_detail, "duplicate_index", completed, len(files), "files", entry.relative_path)
             physical = (entry.device, entry.inode)
             if entry.path in seen_paths or (entry.inode and physical in seen_inodes):
+                if entry.path not in seen_paths:
+                    metrics["hardlink_aliases"] += 1
                 continue
             seen_paths.add(entry.path)
             if entry.inode:
                 seen_inodes.add(physical)
             sizes[entry.size].append(entry)
         candidates_by_size = [entries for entries in sizes.values() if len(entries) > 1]
+        metrics["candidate_files"] = sum(map(len, candidates_by_size))
         sample_total = sum(len(entries) for entries in candidates_by_size if entries[0].size >= SAMPLE_MIN_SIZE)
         sample_completed = 0
         hash_batches: list[list[FileEntry]] = []
@@ -385,7 +430,9 @@ def find_duplicates(
                 try:
                     _report(progress, f"Sampling {entry.relative_path}")
                     samples[_sample_digest(entry, cancel)].append(entry)
+                    metrics["sampled_files"] += 1
                 except OSError as exc:
+                    skipped(entry, "sample", exc)
                     _report(progress, f"Skipped {entry.relative_path}: {exc}")
                 sample_completed += 1
                 _detail(progress_detail, "duplicate_sample", sample_completed, sample_total, "files", entry.relative_path)
@@ -401,7 +448,9 @@ def find_duplicates(
                 try:
                     _report(progress, f"Hashing {entry.relative_path}")
                     hashes[_digest(entry, cancel)].append(entry)
+                    metrics["full_hash_files"] += 1
                 except OSError as exc:
+                    skipped(entry, "hash", exc)
                     _report(progress, f"Skipped {entry.relative_path}: {exc}")
                 hash_completed += 1
                 _detail(progress_detail, "duplicate_hash", hash_completed, hash_total, "files", entry.relative_path)
@@ -426,6 +475,7 @@ def find_duplicates(
                             pass
                         partitions.append([entry])
                 except OSError as exc:
+                    skipped(entry, "byte_comparison", exc)
                     _report(progress, f"Skipped {entry.relative_path}: {exc}")
                 verify_completed += 1
                 _detail(progress_detail, "duplicate_verify", verify_completed, verify_total, "files", entry.relative_path)
@@ -450,16 +500,34 @@ def find_duplicates(
                     try:
                         _seal_duplicate_proof(group, bucket, hash_snapshots)
                     except OSError as exc:
+                        for member in bucket:
+                            skipped(member, "proof", exc)
                         _report(progress, f"Skipped verified group: {exc}")
                         continue
                     groups.append(group)
+        for candidates in candidates_by_size:
+            for entry in candidates:
+                _check_cancel(cancel)
+                original = hash_snapshots.get(entry.path)
+                if original is None or entry.path in skipped_paths:
+                    continue
+                try:
+                    current = _current_snapshot(entry)
+                    if any(current[key] != original[key] for key in current):
+                        raise OSError("File changed after its sample/hash read; result is partial")
+                except OSError as exc:
+                    skipped(entry, "final_snapshot", exc)
+        groups = [group for group in groups if not skipped_paths.intersection(group.paths)]
         _check_cancel(cancel)
         _detail(progress_detail, "duplicate_complete", len(files), len(files), "files", "중복 검사를 완료했습니다.", terminal=True)
     except _Cancelled:
+        summary["complete"] = False
+        summary["cancelled"] = True
         _detail(progress_detail, "duplicate_cancelled", 0, None, "files", "중복 검사를 중단했습니다.", terminal=True)
         return []
     finally:
         _DUPLICATE_READS.sink = previous_sink
+        _DUPLICATE_READS.metrics = previous_metrics
     return groups
 
 
@@ -743,6 +811,7 @@ def find_similar(
     progress_detail: Callable[[dict], None] | None = None,
     cache: AnalysisCache | None = None,
     search_mode: str = "auto", max_candidates_per_file: int = 32,
+    verified_duplicates: list[MatchGroup] | None = None,
 ) -> list[MatchGroup]:
     """Suggest directly similar pairs by filename, small UTF-8 text or image.
 
@@ -762,6 +831,8 @@ def find_similar(
     omitted text/image thresholds default to max(threshold, .90), while the
     omitted name threshold defaults to threshold. Every result reports those
     effective thresholds and all available enabled metrics in ``evidence``.
+    Live authenticated ``verified_duplicates`` may be reused after metadata
+    revalidation; imported reports cannot replace a real duplicate analysis.
     """
     def checked_threshold(value: float, label: str) -> float:
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.5 <= value <= 1:
@@ -834,8 +905,26 @@ def find_similar(
         notice(f"Content-only profile: {summary['unsupported_files']:,} files have no supported enabled comparison method and were not hashed or paired.", warning=True)
     try:
         _check_cancel(cancel)
-        exact_groups = find_duplicates(eligible_files, cancel=cancel, progress=exact_progress,
-                                       progress_detail=progress_detail)
+        summary["exact_results_reused"] = verified_duplicates is not None
+        if verified_duplicates is None:
+            exact_groups = find_duplicates(eligible_files, cancel=cancel, progress=exact_progress,
+                                           progress_detail=progress_detail)
+        else:
+            exact_groups = []
+            by_path = {entry.path: entry for entry in files}
+            for group in verified_duplicates:
+                _check_cancel(cancel)
+                proof = validate_duplicate_proof(group)
+                if not set(proof) <= by_path.keys():
+                    raise ValueError("Reused duplicate group is outside the current inventory")
+                try:
+                    for path, original in proof.items():
+                        current = _current_snapshot(by_path[path])
+                        if any(current[key] != original[key] for key in current):
+                            raise OSError("Reused duplicate group changed after verification")
+                    exact_groups.append(group)
+                except OSError as exc:
+                    notice(f"Skipped reused exact group: {exc}", warning=True, skipped=True)
         _check_cancel(cancel)
         exact_membership = {path: index for index, group in enumerate(exact_groups) for path in group.paths}
         if exact_groups:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from html import escape
+import csv
 import json
 from pathlib import Path
 
@@ -16,10 +17,101 @@ DEFINITIONS = {
     "storage": "안전 보관과 보호 사본은 용량을 차지합니다. 표시된 중복 용량은 즉시 회수되는 공간이 아닙니다.",
 }
 
+COMMON_SCHEMA = "folder-organizer.common.v1"
+COMMON_CSV_COLUMNS = ("relative_path", "size", "modified_ns", "created_ns", "kind", "extension")
+
+
+def build_common_report(scan: ScanResult, *, duplicates: list[MatchGroup] | None = None,
+                        duplicate_analysis: dict | None = None,
+                        similar: list[MatchGroup] | None = None,
+                        comparison_report: dict | None = None,
+                        phase_seconds: dict | None = None) -> dict:
+    """Versioned semantic interchange; never serializes private action proofs.
+
+    Decimal strings preserve nanoseconds across consumers whose JSON numbers
+    cannot represent 64/128-bit integers. Unknown creation time stays null.
+    """
+    def relative(value: str) -> str:
+        return Path(value).relative_to(Path(scan.root)).as_posix()
+
+    diagnostics = duplicate_analysis or {}
+    comparison = comparison_report or {}
+    groups = []
+    for group in duplicates or []:
+        if group.kind != "duplicate" or group.evidence.get("byte_identical") is not True:
+            raise ValueError("Common exact groups require verified byte equality")
+        groups.append({"paths": sorted(relative(path) for path in group.paths),
+                       "size": group.evidence["size_bytes"], "sha256": group.evidence["sha256"]})
+    files = [{"relative_path": relative(entry.path), "size": entry.size,
+              "modified_ns": str(entry.mtime_ns),
+              "created_ns": str(entry.created_ns) if entry.created_ns is not None else None,
+              "kind": entry.kind, "extension": entry.suffix}
+             for entry in scan.files]
+    inventory_complete = not scan.cancelled and not scan.warnings
+    pairs = []
+    for group in similar or []:
+        evidence = group.evidence
+        pairs.append({"left": relative(group.paths[0]), "right": relative(group.paths[1]),
+                      "name_score": evidence.get("name_score"), "text_score": evidence.get("text_score"),
+                      "image_score": evidence.get("image_score"),
+                      "byte_identical": evidence.get("byte_identical")})
+    warnings = []
+    for warning in diagnostics.get("warnings", []):
+        item = dict(warning)
+        try:
+            item["path"] = relative(item["path"])
+        except (ValueError, KeyError):
+            pass
+        warnings.append(item)
+    return {
+        "schema": COMMON_SCHEMA, "app_version": __version__, "engine": "Python", "action_authority": False,
+        "scope": {key: scan.scan_options.get(key, default) for key, default in (
+            ("recursive", True), ("include_hidden", False), ("exclude_patterns", []),
+            ("min_size", 0), ("max_size", None))},
+        "inventory": {"files": files, "file_count": len(files), "total_bytes": scan.total_size,
+                      "complete": inventory_complete, "cancelled": scan.cancelled,
+                      "warnings": list(scan.warnings)},
+        "duplicates": {"requested": duplicates is not None,
+                       "complete": (inventory_complete and diagnostics.get("complete", True))
+                                   if duplicates is not None else None,
+                       "groups": groups, "warnings": warnings,
+                       "warning_count": diagnostics.get("warning_count", len(warnings)),
+                       "warnings_truncated": diagnostics.get("warnings_truncated", False),
+                       "metrics": dict(diagnostics.get("metrics", {}))},
+        "similarity": {"requested": similar is not None, "pairs": pairs,
+                       "complete": (inventory_complete and comparison.get("exhaustive", True)
+                                    and not comparison.get("limit_reached")
+                                    and not comparison.get("cancelled")
+                                    and not comparison.get("skipped_count", 0)) if similar is not None else None,
+                       "approximate": comparison.get("effective_search_mode") == "indexed",
+                       "methods": comparison.get("methods", []),
+                       "thresholds": comparison.get("thresholds", {}),
+                       "compared_pairs": comparison.get("compared_pairs", 0),
+                       "max_pairs": comparison.get("max_pairs", 25_000),
+                       "warnings": list(comparison.get("warnings", [])),
+                       "candidate_index": {key: value for key, value in comparison.items()
+                                           if key.startswith("candidate_") or key.startswith("index_")}},
+        "phase_seconds": dict(phase_seconds or {}),
+    }
+
+
+def write_common_csv(path: str | Path, scan: ScanResult) -> None:
+    def cell(value: str) -> str:
+        return "'" + value if value.startswith(("=", "+", "-", "@", "\t", "\r", "\n")) else value
+    with Path(path).open("x", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream, quoting=csv.QUOTE_ALL, lineterminator="\n")
+        writer.writerow(COMMON_CSV_COLUMNS)
+        for entry in scan.files:
+            name = Path(entry.path).relative_to(scan.root).as_posix()
+            extension = entry.suffix
+            writer.writerow((cell(name), entry.size, entry.mtime_ns,
+                             entry.created_ns if entry.created_ns is not None else "",
+                             entry.kind, cell(extension)))
+
 
 def build_report(scan: ScanResult, *, duplicates: list[MatchGroup] | None = None,
                  similar: list[MatchGroup] | None = None, comparison_report: dict | None = None,
-                 selection: dict | None = None) -> dict:
+                 selection: dict | None = None, duplicate_analysis: dict | None = None) -> dict:
     report = {
         "schema_version": 2, "app_version": __version__,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -37,6 +129,8 @@ def build_report(scan: ScanResult, *, duplicates: list[MatchGroup] | None = None
         report["similar"] = [group.to_dict() for group in similar]
     if comparison_report is not None:
         report["comparison_report"] = dict(comparison_report)
+    if duplicate_analysis is not None:
+        report["duplicate_analysis"] = dict(duplicate_analysis)
     if selection is not None:
         report["selection"] = selection
     return report
@@ -83,6 +177,11 @@ def render_html_report(report: dict) -> str:
     parts.append(f"<p>제외 패턴: {_cell(', '.join(patterns) or '없음')}</p>")
     if report.get("cancelled"):
         parts.append("<p class='notice'>중단된 분석입니다. 전체 폴더를 검사한 결과가 아닙니다.</p>")
+    duplicate_status = report.get("duplicate_analysis", {})
+    if duplicate_status and not duplicate_status.get("complete", True):
+        parts.append("<p class='notice'>중복 검사 일부를 완료하지 못했습니다. 확인된 그룹만 표시하며, 없는 결과를 전체 폴더의 중복 없음으로 해석하면 안 됩니다.</p>")
+        for warning in duplicate_status.get("warnings", [])[:100]:
+            parts.append(f"<p class='notice'>{_cell(warning.get('path'))}: {_cell(warning.get('message'))}</p>")
     diagnostics = report.get("comparison_report", {})
     if diagnostics:
         mode = diagnostics.get("effective_search_mode")

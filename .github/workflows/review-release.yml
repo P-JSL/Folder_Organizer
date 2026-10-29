@@ -1,0 +1,133 @@
+name: Report review and release
+run-name: v0.7.0 changed paths · ${{ github.sha }}
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  native:
+    name: New Windows paths
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned compiler
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust-app/target
+          key: windows-rust-static-1.99.1-${{ hashFiles('rust-app/Cargo.lock', 'rust-app/Cargo.toml', '.cargo/config.toml') }}
+          restore-keys: windows-rust-static-1.99.1-
+      - name: Check only new native Windows cases
+        run: cargo +1.99.1 test --manifest-path rust-app/Cargo.toml --locked --target x86_64-pc-windows-msvc --test windows_review_v070
+  build:
+    name: Build both editions
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install packaging dependencies
+        run: python -m pip install -e ".[bundle]"
+      - name: Install pinned compiler
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - uses: actions/cache/restore@v4
+        id: rust_cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust-app/target
+          key: windows-rust-static-1.99.1-${{ hashFiles('rust-app/Cargo.lock', 'rust-app/Cargo.toml', '.cargo/config.toml') }}
+          restore-keys: windows-rust-static-1.99.1-
+      - name: Build changed Widgets distribution
+        run: python scripts/build_python_distribution.py
+      - name: Build changed native Rust programs
+        run: cargo +1.99.1 build --manifest-path rust-app/Cargo.toml --locked --target x86_64-pc-windows-msvc --release --features gui --bins
+      - name: Package native programs and notices
+        run: python scripts/package_rust.py --binaries rust-app/target/x86_64-pc-windows-msvc/release
+      - name: Archive exact release payloads
+        run: python scripts/archive_review_release.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FolderOrganizer-v070-build
+          retention-days: 14
+          compression-level: 0
+          path: release-build/*
+      - name: Preserve compiler cache
+        if: always() && steps.rust_cache.outputs.cache-primary-key != '' && steps.rust_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust-app/target
+          key: ${{ steps.rust_cache.outputs.cache-primary-key }}
+  review:
+    name: New artifact checks
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install fixture image encoder
+        run: python -m pip install Pillow==12.3.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: FolderOrganizer-v070-build
+          path: release-build
+      - name: Extract exact build artifacts
+        run: python scripts/extract_review_release.py
+      - name: Check changed Python packaging and visible Widgets
+        run: python scripts/windows_python_bundle_v070.py
+      - name: Check changed Rust GUI startup
+        run: |
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP "rust-v070-local"
+          $env:FOLDER_ORGANIZER_RUST_SMOKE = '1'
+          $process = Start-Process -FilePath dist/FolderOrganizerRust/FolderOrganizerRust.exe -ArgumentList '--gui-smoke' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "New Rust GUI failed ($($process.ExitCode))" }
+      - name: Compare changed exact analysis and common report with five alternating runs
+        run: python scripts/benchmark_editions_v070.py --require-windows --python-command '["dist/FolderOrganizer/FolderOrganizer.exe", "--cli"]' --rust-command '["dist/FolderOrganizerRust/FolderOrganizerRustCLI.exe"]' --output dist/EDITIONS_BENCHMARK_0.7.0.json
+      - name: Record changed-path results
+        run: |
+          New-Item -ItemType Directory review-results
+          Copy-Item dist/PYTHON_PACKAGE_CHECK.json,dist/PYTHON_PACKAGE_GUI.png,dist/EDITIONS_BENCHMARK_0.7.0.json review-results/
+          '{"native_gui_rendered":true,"version":"0.7.0","unchanged_feature_tests":"skipped"}' | Set-Content -Encoding utf8 review-results/RUST_GUI_CHECK.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FolderOrganizer-v070-review
+          retention-days: 14
+          path: review-results/*
+  publish:
+    name: Publish reviewed release
+    needs: [build, native, review]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: FolderOrganizer-v070-build
+          path: release-build
+      - uses: actions/download-artifact@v4
+        with:
+          name: FolderOrganizer-v070-review
+          path: review-results
+      - name: Publish both passed editions
+        run: python scripts/publish_review_release.py

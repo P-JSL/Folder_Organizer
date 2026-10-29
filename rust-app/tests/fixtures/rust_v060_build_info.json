@@ -1,0 +1,19 @@
+{
+  "repository": "P-JSL/Folder_Organizer",
+  "edition": "Rust",
+  "version": "0.6.0",
+  "release_tag": "v0.6.0",
+  "original_release_commit": "1cceb715e94aee7462f03d0c7f3d775d91eb443b",
+  "source_commit": "d6d2028bf19787901530c71b71e508c472ce5866",
+  "build_kind": "formal-rust-only-hotfix",
+  "target": "x86_64-pc-windows-msvc",
+  "rust_toolchain": "1.99.1",
+  "workflow": ".github/workflows/rust-hotfix.yml",
+  "workflow_run": "40835739578",
+  "workflow_attempt": "1",
+  "program_sha256": {
+    "FolderOrganizerRust.exe": "cf34c4d5d5a3c138f5d66a444e82a1ba3b963d0e1f355605ae2f0982c39bf548",
+    "FolderOrganizerRustCLI.exe": "7070bbb9f9f73fd7d6ee76adaeaf225cf26d6742923a02aae5b812ccd39e2f9e",
+    "FolderOrganizerRustUpdater.exe": "aa42625be58156701859075f3eaba9437171f2dfff32468c4621aa096fc14ff8"
+  }
+}

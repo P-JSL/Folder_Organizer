@@ -17,6 +17,7 @@ class FileEntry:
     mtime_ns: int
     device: int
     inode: int
+    created_ns: int | None = None
 
     def to_dict(self) -> dict:
         # Inventory fields are immutable scalars. dataclasses.asdict recursively
@@ -28,6 +29,7 @@ class FileEntry:
             "created": self.created, "created_source": self.created_source,
             "kind": self.kind, "suffix": self.suffix, "mtime_ns": self.mtime_ns,
             "device": self.device, "inode": self.inode,
+            "created_ns": self.created_ns,
         }
 
 

@@ -258,6 +258,9 @@ def scan_folder(
                         kind="application" if suffix in APPLICATION_SUFFIXES or in_app_bundle else "file",
                         suffix=suffix, mtime_ns=details.st_mtime_ns,
                         device=details.st_dev, inode=details.st_ino,
+                        created_ns=(getattr(details, "st_birthtime_ns", None)
+                                    if source == "birthtime" else
+                                    details.st_ctime_ns if source == "windows_creation_time" else None),
                     ))
                     total_bytes += details.st_size
                     if progress is not None:

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.0 — 2026-10-29 · Report-driven review
+
+- Add Rust's large-file sample prefilter while retaining full SHA-256, byte proof and snapshot checks; record actual sample/hash/comparison reads and explicit partial-file failures.
+- Strengthen bounded Rust similarity candidates with actual text/image features and expose individual methods, thresholds and pair limits through the CLI.
+- Add opt-in `folder-organizer.common.v1` JSON and shared CSV columns; preserve native report formats, exact integer dates, error visibility and process-local action authority.
+- Reuse authenticated Python duplicate results during combined CLI analyses instead of repeating the full duplicate pass; retain complete/partial diagnostics in reports and the GUI.
+- Fix cancelled-copy undo touching a later external hardlink and support only the precisely identified historical Rust build receipt in newer updater validation.
+- Trim Python distribution data through imported Qt Widgets hooks and keep runtime plugins, software rendering, codecs and legal notices. Measure the final packages rather than inferring runtime speed from ZIP size.
+- Run only new checks for changed paths. Existing passed checks and untouched functionality are skipped; Windows synthetic measurements do not establish physical NAS or cold-cache performance.
+
 ## 0.6.1 — 2026-10-29 · Python / Rust
 
 - Add a proprietary authorized-use-only application license, detailed terms, local-data/privacy notice and permission-request guidance. Preserve third-party licenses and existing lawful grants; include legal notices in both packages without changing the already released executables.

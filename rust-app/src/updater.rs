@@ -572,6 +572,10 @@ pub fn validate_install_contents(directory: &Path) -> AppResult<()> {
     ];
     for entry in fs::read_dir(directory).map_err(io_error)? {
         let entry = entry.map_err(io_error)?;
+        if entry.file_name() == "BUILD_INFO.json" {
+            validate_legacy_build_receipt(directory, &entry.path())?;
+            continue;
+        }
         require(
             entry
                 .file_name()
@@ -582,6 +586,41 @@ pub fn validate_install_contents(directory: &Path) -> AppResult<()> {
         plain_path(&entry.path(), true)?;
     }
     Ok(())
+}
+
+fn validate_legacy_build_receipt(directory: &Path, path: &Path) -> AppResult<()> {
+    // The formal 0.6.0 hotfix shipped this exact public document at app root.
+    // Recognize only that document, including its complete fixed hash map;
+    // accepting arbitrary JSON here could mistake personal data for app files.
+    // This is a historical document allowance, not proof that currently
+    // installed executables equal that old build. Stage manifests and checksums
+    // independently protect the executable bytes during an actual update.
+    plain_path(path, true)?;
+    let mut file = core::safe_open(path)?;
+    let before = core::snapshot_open_file(&file)?;
+    require(before.size <= 8192, "이전 빌드 정보 문서가 너무 큽니다.")?;
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut file)
+        .take(8193)
+        .read_to_end(&mut bytes)
+        .map_err(io_error)?;
+    require(
+        bytes.len() as u64 == before.size
+            && core::snapshot_open_file(&file)? == before
+            && core::snapshot(path)? == before,
+        "이전 빌드 정보가 읽는 중 변경되었습니다.",
+    )?;
+    // Exact hashes also reject duplicate JSON keys or discarded unknown text.
+    // Accept the shipped Windows CRLF document and its LF-only text equivalent.
+    let checksum = format!("{:x}", Sha256::digest(&bytes));
+    let installed = read_marker(directory)?;
+    require(
+        version_tuple(&installed)? >= (0, 6, 0)
+            && matches!(checksum.as_str(),
+                "3ed4057e4ca4381b36aa2e505e375b106644866b85731ed4d906ed0a7ed4daed"
+                | "36f83359737214268b71fdc8874f7f71b7ecb8952242627304cc235fd1aaca10"),
+        "BUILD_INFO.json이 알려진 공식 이전 빌드 문서와 달라 자동 교체하지 않습니다. 해당 파일을 앱 폴더 밖에 보관하세요.",
+    )
 }
 
 pub fn manifest(directory: &Path, cancel: &AtomicBool) -> AppResult<BTreeMap<String, String>> {

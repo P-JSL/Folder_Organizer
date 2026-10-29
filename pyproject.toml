@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "folder-organizer-desktop"
-version = "0.6.1"
+version = "0.7.0"
 description = "A local Windows folder organizer with verified matching, recoverable storage and undo"
 readme = "README.md"
 license = "LicenseRef-PJSL-Authorized-Use-Only"

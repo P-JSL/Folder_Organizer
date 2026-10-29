@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, Metadata, OpenOptions};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
@@ -17,6 +17,9 @@ pub type AppResult<T> = Result<T, String>;
 const BUFFER: usize = 256 * 1024;
 const CONTENT_LIMIT: u64 = 4 * 1024 * 1024;
 const CONTENT_BUDGET: usize = 16 * 1024 * 1024;
+const SAMPLE_MIN_SIZE: u64 = 1024 * 1024;
+const SAMPLE_BYTES: usize = 64 * 1024;
+const DUPLICATE_WARNING_LIMIT: usize = 1000;
 type ProofMac = Hmac<Sha256>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -105,6 +108,52 @@ pub struct DuplicateGroup {
     snapshots: Vec<FileSnapshot>,
     #[serde(skip)]
     proof: Option<Vec<u8>>,
+}
+
+/// A skipped file or inventory limitation is visible separately from verified
+/// groups. Warnings never grant permission to delete a file.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DuplicateWarning {
+    pub path: PathBuf,
+    pub phase: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for DuplicateWarning {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} [{}]: {}",
+            self.path.display(),
+            self.phase,
+            self.message
+        )
+    }
+}
+
+/// Read requests made by this analysis, not estimates of physical disk I/O.
+/// File counts refer to successfully completed, snapshot-verified reads; byte
+/// counters include bytes already read by an attempt that subsequently failed.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct DuplicateMetrics {
+    pub candidate_files: u64,
+    pub sampled_files: u64,
+    pub sample_bytes: u64,
+    pub full_hash_files: u64,
+    pub full_hash_bytes: u64,
+    pub byte_comparison_bytes: u64,
+    pub hardlink_aliases: u64,
+    pub skipped_files: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DuplicateAnalysis {
+    pub groups: Vec<DuplicateGroup>,
+    pub warnings: Vec<DuplicateWarning>,
+    pub warning_count: u64,
+    pub warnings_truncated: bool,
+    pub complete: bool,
+    pub metrics: DuplicateMetrics,
 }
 
 pub fn time_ns(value: SystemTime) -> i128 {
@@ -756,6 +805,7 @@ fn fingerprint_inner(
     path: &Path,
     keep_content: bool,
     cancel: Option<&AtomicBool>,
+    mut metrics: Option<&mut DuplicateMetrics>,
 ) -> AppResult<Fingerprint> {
     let mut file = safe_open(path)?;
     let before = snapshot_open_file(&file)?;
@@ -776,6 +826,9 @@ fn fingerprint_inner(
             break;
         }
         read = read.saturating_add(count as u64);
+        if let Some(metrics) = metrics.as_deref_mut() {
+            metrics.full_hash_bytes = metrics.full_hash_bytes.saturating_add(count as u64);
+        }
         if read > before.size {
             return Err(format!("읽는 동안 크기가 바뀌었습니다: {}", path.display()));
         }
@@ -787,6 +840,9 @@ fn fingerprint_inner(
     if read != before.size || snapshot_open_file(&file)? != before || snapshot(path)? != before {
         return Err(format!("읽는 동안 파일이 바뀌었습니다: {}", path.display()));
     }
+    if let Some(metrics) = metrics {
+        metrics.full_hash_files += 1;
+    }
     Ok(Fingerprint {
         snapshot: before,
         digest: format!("{:x}", hash.finalize()),
@@ -795,7 +851,7 @@ fn fingerprint_inner(
 }
 
 pub fn fingerprint(path: &Path) -> AppResult<(FileSnapshot, String)> {
-    let value = fingerprint_inner(path, false, None)?;
+    let value = fingerprint_inner(path, false, None, None)?;
     Ok((value.snapshot, value.digest))
 }
 
@@ -805,6 +861,7 @@ fn bytes_equal(
     a: &FileSnapshot,
     b: &FileSnapshot,
     cancel: &AtomicBool,
+    metrics: &mut DuplicateMetrics,
 ) -> AppResult<bool> {
     let mut left_file = safe_open(left)?;
     let mut right_file = safe_open(right)?;
@@ -821,9 +878,11 @@ fn bytes_equal(
         let na = left_file
             .read(&mut left_buffer)
             .map_err(|error| error.to_string())?;
+        metrics.byte_comparison_bytes = metrics.byte_comparison_bytes.saturating_add(na as u64);
         let nb = right_file
             .read(&mut right_buffer)
             .map_err(|error| error.to_string())?;
+        metrics.byte_comparison_bytes = metrics.byte_comparison_bytes.saturating_add(nb as u64);
         if na != nb || left_buffer[..na] != right_buffer[..nb] {
             equal = false;
             break;
@@ -842,95 +901,334 @@ fn bytes_equal(
     Ok(equal)
 }
 
-pub fn find_duplicates(
+/// Read only three bounded ranges to reject differing large files cheaply.
+/// A matching sample is never a duplicate proof: full SHA-256 and actual byte
+/// equality still follow, using the same stable snapshots as before sampling.
+fn sample_digest(
+    path: &Path,
+    expected: &FileSnapshot,
+    cancel: &AtomicBool,
+    metrics: &mut DuplicateMetrics,
+) -> AppResult<String> {
+    let mut file = safe_open(path)?;
+    if snapshot_open_file(&file)? != *expected || expected.size < SAMPLE_MIN_SIZE {
+        return Err("표본 비교 직전 파일이 변경되었습니다.".into());
+    }
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0_u8; SAMPLE_BYTES];
+    let last = expected.size - SAMPLE_BYTES as u64;
+    for offset in [0, last / 2, last] {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("중복 검사를 취소했습니다.".into());
+        }
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|error| error.to_string())?;
+        let mut completed = 0;
+        while completed < buffer.len() {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("중복 검사를 취소했습니다.".into());
+            }
+            let count = file
+                .read(&mut buffer[completed..])
+                .map_err(|error| error.to_string())?;
+            if count == 0 {
+                return Err("표본을 읽는 동안 파일 크기가 변경되었습니다.".into());
+            }
+            metrics.sample_bytes = metrics.sample_bytes.saturating_add(count as u64);
+            completed += count;
+        }
+        digest.update(&buffer);
+    }
+    if snapshot_open_file(&file)? != *expected || snapshot(path)? != *expected {
+        return Err("표본을 읽는 동안 파일이 변경되었습니다.".into());
+    }
+    metrics.sampled_files += 1;
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn duplicate_warning(
+    analysis: &mut DuplicateAnalysis,
+    rejected: &mut HashSet<PathBuf>,
+    path: &Path,
+    phase: &str,
+    message: String,
+) {
+    if rejected.insert(path.to_path_buf()) {
+        analysis.metrics.skipped_files += 1;
+    }
+    analysis.complete = false;
+    analysis.warning_count = analysis.warning_count.saturating_add(1);
+    if analysis.warnings.len() < DUPLICATE_WARNING_LIMIT {
+        analysis.warnings.push(DuplicateWarning {
+            path: path.to_path_buf(),
+            phase: phase.into(),
+            message,
+        });
+    } else {
+        analysis.warnings_truncated = true;
+    }
+}
+
+/// Analyze independent files despite a disappearing/unreadable candidate, while
+/// making every omitted scope explicit. Only successfully full-read, byte-
+/// verified and revalidated groups receive the process-local deletion proof.
+/// Cancellation and unavailable proof authentication remain terminal errors.
+pub fn analyze_duplicates(
     scan: &ScanResult,
     cancel: &AtomicBool,
     progress: Option<&dyn Fn(Progress)>,
-) -> AppResult<Vec<DuplicateGroup>> {
+) -> AppResult<DuplicateAnalysis> {
     if scan.cancelled {
         return Err("완료되지 않은 목록으로 중복을 정리할 수 없습니다.".into());
     }
+    if cancel.load(Ordering::Relaxed) {
+        return Err("중복 검사를 취소했습니다.".into());
+    }
+    let mut analysis = DuplicateAnalysis {
+        groups: vec![],
+        warnings: scan
+            .warnings
+            .iter()
+            .take(DUPLICATE_WARNING_LIMIT)
+            .map(|message| DuplicateWarning {
+                path: scan.root.clone(),
+                phase: "inventory".into(),
+                message: message.clone(),
+            })
+            .collect(),
+        warning_count: scan.warnings.len() as u64,
+        warnings_truncated: scan.warnings.len() > DUPLICATE_WARNING_LIMIT,
+        complete: scan.warnings.is_empty(),
+        metrics: DuplicateMetrics::default(),
+    };
     let mut sizes: HashMap<u64, Vec<&FileEntry>> = HashMap::new();
     for file in &scan.files {
         sizes.entry(file.size).or_default().push(file);
     }
-    let total: usize = sizes
-        .values()
-        .filter(|files| files.len() > 1)
-        .map(Vec::len)
-        .sum();
-    let mut completed = 0_u64;
-    let mut last_progress = Instant::now();
-    let mut groups = Vec::new();
+    let mut sizes: Vec<_> = sizes
+        .into_iter()
+        .filter(|(_, files)| files.len() > 1)
+        .collect();
+    sizes.sort_unstable_by_key(|(size, _)| *size);
+    analysis.metrics.candidate_files = sizes.iter().map(|(_, files)| files.len() as u64).sum();
     let mut aliases = HashSet::new();
-    for files in sizes.values().filter(|files| files.len() > 1) {
-        struct Bucket {
-            members: Vec<(PathBuf, FileSnapshot)>,
-            content: Option<Vec<u8>>,
-        }
-        let mut hashes: HashMap<String, Vec<Bucket>> = HashMap::new();
-        let mut cached: usize = 0;
+    let mut rejected = HashSet::new();
+    let mut observed = Vec::new();
+    let mut batches = Vec::new();
+    let mut sample_total = 0;
+    for (size, files) in sizes {
+        let mut candidates = Vec::new();
         for entry in files {
             if cancel.load(Ordering::Relaxed) {
                 return Err("중복 검사를 취소했습니다.".into());
             }
-            // Capture identity before content reads and keep that exact version
-            // throughout hashing, byte verification and proof generation.
-            let current = snapshot(&entry.path)?;
-            if current.inode == 0 {
-                return Err(format!(
-                    "안정적인 파일 식별 번호를 제공하지 않는 위치입니다: {}",
-                    entry.path.display()
-                ));
-            }
-            if current.size != entry.size
+            let current = match snapshot(&entry.path) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    duplicate_warning(&mut analysis, &mut rejected, &entry.path, "snapshot", error);
+                    continue;
+                }
+            };
+            if current.inode == 0
+                || current.size != entry.size
                 || current.modified_ns != entry.modified_ns
                 || entry
                     .identity
                     .as_ref()
                     .is_some_and(|value| value != &current)
             {
-                return Err(format!(
-                    "목록 분석 후 파일이 바뀌었습니다: {}",
-                    entry.path.display()
-                ));
-            }
-            if current.inode != 0 && !aliases.insert((current.device, current.inode)) {
-                completed += 1;
+                duplicate_warning(
+                    &mut analysis,
+                    &mut rejected,
+                    &entry.path,
+                    "snapshot",
+                    "목록 분석 후 파일이 바뀌었거나 안정적인 파일 ID가 없습니다.".into(),
+                );
                 continue;
             }
-            let fingerprint = fingerprint_inner(&entry.path, true, Some(cancel))?;
-            if fingerprint.snapshot != current {
-                return Err("해시 검사 직전에 파일이 바뀌었습니다.".into());
+            if !aliases.insert((current.device, current.inode)) {
+                analysis.metrics.hardlink_aliases += 1;
+                continue;
             }
+            observed.push((entry.path.clone(), current.clone()));
+            candidates.push((entry, current));
+        }
+        if size >= SAMPLE_MIN_SIZE {
+            sample_total += candidates.len() as u64;
+        }
+        batches.push((size, candidates));
+    }
+    notify(
+        progress,
+        "duplicates_sample",
+        0,
+        Some(sample_total),
+        "큰 파일의 일부를 비교해 다른 파일을 먼저 제외합니다.".into(),
+    );
+    let mut hash_batches = Vec::new();
+    let mut sample_completed = 0;
+    let mut last_event = Instant::now();
+    for (size, candidates) in batches {
+        if size < SAMPLE_MIN_SIZE {
+            if candidates.len() > 1 {
+                hash_batches.push(candidates);
+            }
+            continue;
+        }
+        let mut samples: HashMap<String, Vec<(&FileEntry, FileSnapshot)>> = HashMap::new();
+        for (entry, expected) in candidates {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("중복 검사를 취소했습니다.".into());
+            }
+            match sample_digest(&entry.path, &expected, cancel, &mut analysis.metrics) {
+                Ok(sample) => samples.entry(sample).or_default().push((entry, expected)),
+                Err(error) => {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err("중복 검사를 취소했습니다.".into());
+                    }
+                    duplicate_warning(&mut analysis, &mut rejected, &entry.path, "sample", error);
+                }
+            }
+            sample_completed += 1;
+            if sample_completed <= 10
+                || sample_completed % 64 == 0
+                || last_event.elapsed().as_millis() >= 70
+            {
+                notify(
+                    progress,
+                    "duplicates_sample",
+                    sample_completed,
+                    Some(sample_total),
+                    entry.relative_path.clone(),
+                );
+                last_event = Instant::now();
+            }
+        }
+        hash_batches.extend(samples.into_values().filter(|files| files.len() > 1));
+    }
+    notify(
+        progress,
+        "duplicates_sample",
+        sample_completed,
+        Some(sample_total),
+        "표본 비교를 마쳤습니다. 같은 표본의 파일은 전체 내용을 검증합니다.".into(),
+    );
+    let total: u64 = hash_batches.iter().map(|files| files.len() as u64).sum();
+    let mut completed = 0;
+    let mut pending_groups = Vec::new();
+    for files in hash_batches {
+        struct Bucket {
+            members: Vec<(PathBuf, FileSnapshot)>,
+            content: Option<Vec<u8>>,
+        }
+        let mut hashes: HashMap<String, Vec<Bucket>> = HashMap::new();
+        let mut cached = 0_usize;
+        for (entry, expected) in files {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("중복 검사를 취소했습니다.".into());
+            }
+            let fingerprint = match fingerprint_inner(
+                &entry.path,
+                true,
+                Some(cancel),
+                Some(&mut analysis.metrics),
+            ) {
+                Ok(value) if value.snapshot == expected => value,
+                Ok(_) => {
+                    duplicate_warning(
+                        &mut analysis,
+                        &mut rejected,
+                        &entry.path,
+                        "hash",
+                        "전체 해시 검사 직전에 파일이 바뀌었습니다.".into(),
+                    );
+                    completed += 1;
+                    continue;
+                }
+                Err(error) => {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err("중복 검사를 취소했습니다.".into());
+                    }
+                    duplicate_warning(&mut analysis, &mut rejected, &entry.path, "hash", error);
+                    completed += 1;
+                    continue;
+                }
+            };
             let buckets = hashes.entry(fingerprint.digest).or_default();
             let mut matched = false;
+            let mut failed = false;
             for bucket in buckets.iter_mut() {
-                let (anchor, anchor_snapshot) = &bucket.members[0];
+                while let Some((anchor, expected)) = bucket.members.first() {
+                    match snapshot(anchor) {
+                        Ok(current) if current == *expected => break,
+                        result => {
+                            let error = result
+                                .err()
+                                .unwrap_or_else(|| "비교 중 보존 후보가 변경되었습니다.".into());
+                            duplicate_warning(
+                                &mut analysis,
+                                &mut rejected,
+                                anchor,
+                                "byte_compare",
+                                error,
+                            );
+                            bucket.members.swap_remove(0);
+                        }
+                    }
+                }
+                let Some((anchor, anchor_snapshot)) = bucket.members.first() else {
+                    continue;
+                };
                 let equal = match (&bucket.content, &fingerprint.content) {
-                    (Some(left), Some(right)) => left == right,
+                    (Some(left), Some(right)) => Ok(left == right),
                     _ => bytes_equal(
                         anchor,
                         &entry.path,
                         anchor_snapshot,
                         &fingerprint.snapshot,
                         cancel,
-                    )?,
+                        &mut analysis.metrics,
+                    ),
                 };
-                if equal {
-                    if snapshot(anchor)? != *anchor_snapshot
-                        || snapshot(&entry.path)? != fingerprint.snapshot
-                    {
-                        return Err("중복 검증 후 파일이 바뀌었습니다.".into());
+                match equal {
+                    Err(error) => {
+                        if cancel.load(Ordering::Relaxed) {
+                            return Err("중복 검사를 취소했습니다.".into());
+                        }
+                        duplicate_warning(
+                            &mut analysis,
+                            &mut rejected,
+                            &entry.path,
+                            "byte_compare",
+                            format!("{}와 비교하지 못했습니다: {error}", anchor.display()),
+                        );
+                        failed = true;
+                        break;
                     }
-                    bucket
-                        .members
-                        .push((entry.path.clone(), fingerprint.snapshot.clone()));
-                    matched = true;
-                    break;
+                    Ok(true) => {
+                        if snapshot(anchor).ok().as_ref() != Some(anchor_snapshot)
+                            || snapshot(&entry.path).ok().as_ref() != Some(&fingerprint.snapshot)
+                        {
+                            duplicate_warning(
+                                &mut analysis,
+                                &mut rejected,
+                                &entry.path,
+                                "byte_compare",
+                                "실제 바이트 비교 후 후보가 변경되어 제외했습니다.".into(),
+                            );
+                            failed = true;
+                            break;
+                        }
+                        bucket
+                            .members
+                            .push((entry.path.clone(), fingerprint.snapshot.clone()));
+                        matched = true;
+                        break;
+                    }
+                    Ok(false) => {}
                 }
             }
-            if !matched {
+            if !matched && !failed {
                 let content = fingerprint
                     .content
                     .filter(|value| cached.saturating_add(value.len()) <= CONTENT_BUDGET);
@@ -941,50 +1239,117 @@ pub fn find_duplicates(
                 });
             }
             completed += 1;
-            if completed <= 10 || completed % 64 == 0 || last_progress.elapsed().as_millis() >= 70 {
+            if completed <= 10 || completed % 64 == 0 || last_event.elapsed().as_millis() >= 70 {
                 notify(
                     progress,
                     "duplicates",
                     completed,
-                    Some(total as u64),
+                    Some(total),
                     entry.relative_path.clone(),
                 );
-                last_progress = Instant::now();
+                last_event = Instant::now();
             }
         }
         for (digest, buckets) in hashes {
-            for mut bucket in buckets
+            for bucket in buckets
                 .into_iter()
                 .filter(|bucket| bucket.members.len() > 1)
             {
-                bucket.members.sort_by(|left, right| left.0.cmp(&right.0));
-                for (path, expected) in &bucket.members {
-                    if &snapshot(path)? != expected {
-                        return Err("결과를 준비하는 동안 파일이 바뀌었습니다.".into());
-                    }
-                }
-                let (paths, snapshots): (Vec<_>, Vec<_>) = bucket.members.into_iter().unzip();
-                let mut group = DuplicateGroup {
-                    size: snapshots[0].size,
-                    paths,
-                    sha256: digest.clone(),
-                    snapshots,
-                    proof: None,
-                };
-                seal(&mut group)?;
-                groups.push(group);
+                pending_groups.push((digest.clone(), bucket.members));
             }
         }
     }
-    groups.sort_by(|left, right| left.paths[0].cmp(&right.paths[0]));
+    // Also inspect sample-rejected singletons: if one changed after its sample,
+    // the analysis must not silently advertise full coverage of the old input.
+    for (path, expected) in observed {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("중복 검사를 취소했습니다.".into());
+        }
+        if rejected.contains(&path) {
+            continue;
+        }
+        match snapshot(&path) {
+            Ok(current) if current == expected => {}
+            result => duplicate_warning(
+                &mut analysis,
+                &mut rejected,
+                &path,
+                "final_snapshot",
+                result
+                    .err()
+                    .unwrap_or_else(|| "결과 준비 중 파일이 변경되었습니다.".into()),
+            ),
+        }
+    }
+    for (digest, members) in pending_groups {
+        let mut valid = Vec::new();
+        for (path, expected) in members {
+            if rejected.contains(&path) {
+                continue;
+            }
+            match snapshot(&path) {
+                Ok(current) if current == expected => valid.push((path, expected)),
+                result => duplicate_warning(
+                    &mut analysis,
+                    &mut rejected,
+                    &path,
+                    "final_snapshot",
+                    result
+                        .err()
+                        .unwrap_or_else(|| "그룹 인증 직전 파일이 변경되었습니다.".into()),
+                ),
+            }
+        }
+        if valid.len() < 2 {
+            continue;
+        }
+        valid.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        let (paths, snapshots): (Vec<_>, Vec<_>) = valid.into_iter().unzip();
+        let mut group = DuplicateGroup {
+            size: snapshots[0].size,
+            paths,
+            sha256: digest,
+            snapshots,
+            proof: None,
+        };
+        seal(&mut group)?;
+        analysis.groups.push(group);
+    }
+    analysis
+        .groups
+        .sort_by(|left, right| left.paths[0].cmp(&right.paths[0]));
     notify(
         progress,
         "duplicates",
-        total as u64,
-        Some(total as u64),
-        "내용이 완전히 같은 파일을 확인했습니다.".into(),
+        completed,
+        Some(total),
+        if analysis.complete {
+            "내용이 완전히 같은 파일을 확인했습니다."
+        } else {
+            "일부 파일을 제외했습니다. 검증된 그룹과 경고를 확인하세요."
+        }
+        .into(),
     );
-    Ok(groups)
+    Ok(analysis)
+}
+
+/// Backwards-compatible strict entry point. Call `analyze_duplicates` to keep
+/// verified groups while explicitly presenting per-file omissions to the user.
+pub fn find_duplicates(
+    scan: &ScanResult,
+    cancel: &AtomicBool,
+    progress: Option<&dyn Fn(Progress)>,
+) -> AppResult<Vec<DuplicateGroup>> {
+    let analysis = analyze_duplicates(scan, cancel, progress)?;
+    if analysis.warning_count > scan.warnings.len() as u64 {
+        return Err(analysis
+            .warnings
+            .iter()
+            .find(|warning| warning.phase != "inventory")
+            .map(|warning| format!("{}: {}", warning.path.display(), warning.message))
+            .unwrap_or_else(|| "일부 파일을 확인하지 못했습니다.".into()));
+    }
+    Ok(analysis.groups)
 }
 
 #[cfg(test)]

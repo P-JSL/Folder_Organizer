@@ -32,17 +32,7 @@ jobs:
             rust-app/target
           key: windows-rust-static-1.99.1-${{ hashFiles('rust-app/Cargo.lock', 'rust-app/Cargo.toml', '.cargo/config.toml') }}
       - name: Build changed Python edition (previous suites skipped)
-        run: |
-          python -m PyInstaller --noconfirm --clean --onedir --windowed --name FolderOrganizer --collect-data PySide6 --copy-metadata PySide6-Essentials --copy-metadata shiboken6 --copy-metadata Pillow --copy-metadata pypdf desktop_entry.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name FolderOrganizerUpdater updater_entry.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Copy-Item version.json dist/FolderOrganizer/
-          Copy-Item dist/FolderOrganizerUpdater.exe dist/FolderOrganizer/
-          Copy-Item README.md,CHANGELOG.md,docs/THIRD_PARTY.md dist/FolderOrganizer/
-          Copy-Item -Recurse docs/licenses dist/FolderOrganizer/licenses
-          python scripts/package_legal.py dist/FolderOrganizer
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        run: python scripts/build_python_distribution.py
       - name: Build new native Rust programs
         run: cargo +1.99.1 build --manifest-path rust-app/Cargo.toml --locked --target x86_64-pc-windows-msvc --release --features gui --bins
       - name: Package native Rust edition and dependency notices
