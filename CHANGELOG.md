@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.1 — 2026-10-29 · Python / Rust
+
+- Release both Windows editions as 0.6.1 so existing 0.6.0 installations can recognize a newer update. Preserve the previously passed Python implementation and Rust identity, metadata-preservation and classification fixes.
+- Change version and release metadata only. Skip previously passed tests and application execution checks as requested; build the version-stamped release packages without new feature changes.
+
 ## 0.6.0 — 2026-10-29 · Python / Rust
 
 - Reissue only the Rust Windows package at the same version: handle unsupported extended file-ID queries through verified same-handle legacy identities, refuse lossy Windows ADS/EFS transfers, and continue to later rules when a creation date is unavailable. Preserve the original release tag and Python asset; embed exact hotfix source/build receipts.

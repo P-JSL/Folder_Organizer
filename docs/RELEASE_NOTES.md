@@ -1,31 +1,14 @@
-**Folder Organizer v0.6.0 — Python판과 Rust판을 별도 Windows 정식 빌드로 제공합니다.**
+**Folder Organizer v0.6.1 — Python판·Rust판 Windows 정식 릴리즈**
 
-**2026-10-29 Rust판 수정 재배포 · 버전은 0.6.0 유지**
-
-- 일부 Windows 파일시스템·NAS가 확장 파일 ID 조회를 거부할 때 발생하던 `매개 변수가 틀립니다. (os error 87)`를 수정했습니다. 확장 조회가 지원되지 않을 때만 같은 열린 파일의 호환 ID를 사용합니다. 파일 변경 시각·고유 ID 검증은 유지하며, 고유성을 보장하지 않는 ReFS의 64비트 ID는 사용하지 않습니다.
-- Windows 복사·이동에서 추가 데이터 스트림 또는 EFS 속성을 빠뜨릴 수 있는 경로를 차단했습니다. 이를 보존할 수 없는 파일은 원본을 유지하고 이유를 표시합니다. 다운로드 파일의 `Zone.Identifier`나 스트림 조회를 지원하지 않는 NAS도 이 제한에 포함됩니다. 일반 파일·빈 파일의 복사·이동·복원과 추가 스트림을 가진 파일의 삭제 보관은 지원합니다.
-- 생성일이 없는 파일에 날짜 규칙을 적용할 때 다음 규칙까지 건너뛰던 문제를 수정했습니다.
-- Rust ZIP과 해당 체크섬만 교체합니다. Python ZIP과 기존 `v0.6.0` 태그는 그대로 유지하며, Rust ZIP의 `BUILD_INFO.json`에 실제 수정본 소스와 정식 빌드 정보를 기록합니다.
-
-같은 버전이므로 기존 Rust 0.6.0 앱은 자동 업데이트에서 수정본을 새 버전으로 인식하지 않습니다. Rust ZIP을 다시 받아 새 폴더에 압축 해제하고 실행하세요. 기존 작업의 복원에는 원래 데이터 폴더와 `.folder-organizer-rust` 기록을 그대로 사용합니다.
+이미 통과한 Python 구현과 Rust 수정본의 기능을 유지하고, 두 판의 앱 내부 버전·배포 표식을 **0.6.1**로 맞췄습니다. 기존 0.6.0 앱의 업데이트 기능에서 새 버전으로 인식할 수 있습니다.
 
 | 다운로드 | 실행 파일 |
 | --- | --- |
-| [Python판 ZIP](https://github.com/P-JSL/Folder_Organizer/releases/download/v0.6.0/FolderOrganizer-Windows-x64.zip) | `FolderOrganizer/FolderOrganizer.exe` |
-| [Rust판 ZIP](https://github.com/P-JSL/Folder_Organizer/releases/download/v0.6.0/FolderOrganizer-Rust-Windows-x64.zip) | `FolderOrganizerRust/FolderOrganizerRust.exe` |
+| [Python판 ZIP](https://github.com/P-JSL/Folder_Organizer/releases/download/v0.6.1/FolderOrganizer-Windows-x64.zip) | `FolderOrganizer/FolderOrganizer.exe` |
+| [Rust판 ZIP](https://github.com/P-JSL/Folder_Organizer/releases/download/v0.6.1/FolderOrganizer-Rust-Windows-x64.zip) | `FolderOrganizerRust/FolderOrganizerRust.exe` |
 
-각 ZIP 전체를 별도 폴더에 압축 해제하세요. Python 설치는 필요 없습니다. 체크섬은 함께 제공하는 `SHA256SUMS.txt`에서 확인할 수 있습니다.
+- 기능 변경 없이 버전·릴리즈 정보만 갱신합니다. Rust판의 Windows 파일 식별 오류 87 수정, 추가 데이터 보존 보호, 생성일 없는 파일의 후속 규칙 처리를 포함합니다.
+- 사용자 지시에 따라 **기존 검사·새 회귀 검사·앱 실행 검사를 수행하지 않습니다.** 앱 내부 버전이 일치하도록 버전 표기를 반영한 정식 배포 파일을 빌드하고 체크섬을 제공합니다.
+- 각 ZIP 전체를 별도 폴더에 압축 해제하세요. Python 설치는 필요 없습니다. 각 판의 업데이트·작업 기록은 구분되며, 기존 데이터 폴더와 복원 기록은 유지합니다.
 
-- **두 개의 독립 앱**: Rust판은 Python을 호출하지 않는 네이티브 구현입니다. 파일 조회, 중복·유사 검토, 규칙 정리, 병합, 기록·복원, 압축 보관, 손상 검사·복구본, 로그·보고서·업데이트를 제공합니다.
-- **Windows 화면 호환성**: Rust판은 DirectX 12를 사용하고 사용 가능한 GPU가 없으면 WARP 소프트웨어 렌더링을 선택해 낮은 OpenGL 버전의 원격·가상 환경도 처리합니다.
-- **Python 내부 속도 개선**: 반복 경로·제외 패턴 계산, 목록 레코드와 직렬화 비용, 용량 요약, 이름 비교와 진행 이벤트 생성을 줄였습니다. 로컬 예시 측정의 범위와 수치는 성능 문서에서 구분합니다.
-- **중복된 정리 화면 통합**: 날짜·생성일·확장자 분류는 공통 규칙 화면의 추천 규칙과 `{규칙}` 매핑에서 설정합니다. 기존 작업 기록의 복원은 유지합니다.
-- **첫 파일만 남기기**: 현재 인증된 중복 결과를 재사용해 첫 파일과 보호 파일을 남기고, 재검사·추가 확인 없이 나머지를 `delete_files`로 옮깁니다. 새 삭제에서 `quarantine`·`retained`를 만들지 않습니다.
-- **복원 데이터 보존**: Windows 추가 데이터 스트림·EFS가 있거나 이를 확인할 수 없으면 압축 최적화 대신 원시 보관을 유지합니다. 두 판이 같은 폴더를 동시에 변경하지 않도록 OS 잠금을 공유합니다.
-- **기록과 업데이트 분리**: Python 작업은 Python판, Rust 작업은 Rust판에서 복원합니다. 두 판의 설정·인증된 기록·업데이트 자산을 구분해 서로 다른 앱으로 바뀌지 않게 합니다.
-
-지원 경계도 구분합니다. 유사도 알고리즘의 점수·후보 순서는 두 판에서 같다고 보장하지 않습니다. Rust PDF 복구는 자원 제한 때문에 압축 객체·xref 스트림을 거부하며 이미지 복구는 첫 프레임 보존 범위입니다. 압축 복원은 내용·수정일 중심이고, ACL·확장 속성·원래 생성일의 완전한 재현은 1.0.0 준비 과제입니다. 실제 NAS 장비의 정책을 검증했다는 뜻은 아니며 새 삭제는 `delete_files`를 사용합니다.
-
-이미 통과한 검사는 재사용했습니다. 새 코드·Windows 전용 경로와 이번 두 배포 파일에 필요한 확인만 수행합니다.
-
-[두 판의 구성·기능 대응](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/EDITIONS_0.6.0.md) · [1.0.0 조사와 완료 기준](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/V1_READINESS.md) · [기능 정리 결정](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/FEATURE_DECISIONS.md)
+기능·지원 범위는 [두 판의 안내](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/EDITIONS_0.6.0.md), 이전 변경 사항은 [v0.6.0](https://github.com/P-JSL/Folder_Organizer/releases/tag/v0.6.0)에서 확인할 수 있습니다.

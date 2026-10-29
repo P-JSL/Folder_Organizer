@@ -1,0 +1,66 @@
+name: Version-only Python and Rust release
+run-name: Release ${{ github.ref_name }} · no tests
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install packaging dependencies only
+        run: python -m pip install -e ".[bundle]"
+      - name: Install pinned Rust compiler
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - uses: actions/cache/restore@v4
+        id: rust_cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust-app/target
+          key: windows-rust-static-1.99.1-${{ hashFiles('rust-app/Cargo.lock', 'rust-app/Cargo.toml', '.cargo/config.toml') }}
+          restore-keys: windows-rust-static-1.99.1-
+      - name: Build Python edition with the new version
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name FolderOrganizer --collect-data PySide6 --copy-metadata PySide6-Essentials --copy-metadata shiboken6 --copy-metadata Pillow --copy-metadata pypdf desktop_entry.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name FolderOrganizerUpdater updater_entry.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item version.json dist/FolderOrganizer/
+          Copy-Item dist/FolderOrganizerUpdater.exe dist/FolderOrganizer/
+          Copy-Item README.md,CHANGELOG.md,docs/THIRD_PARTY.md dist/FolderOrganizer/
+          Copy-Item -Recurse docs/licenses dist/FolderOrganizer/licenses
+      - name: Build Rust edition with the new version
+        run: cargo +1.99.1 build --manifest-path rust-app/Cargo.toml --locked --target x86_64-pc-windows-msvc --release --features gui --bins
+      - name: Reuse existing dependency notices
+        run: gh release download v0.6.0 --repo P-JSL/Folder_Organizer --pattern FolderOrganizer-Rust-Windows-x64.zip --dir reuse
+      - name: Package both editions and generate release checksums
+        run: python scripts/package_version_release.py
+      - name: Publish both editions as the new stable release
+        run: |
+          $version = (Get-Content version.json -Raw | ConvertFrom-Json).version
+          $tag = "v$version"
+          gh release create $tag FolderOrganizer-Windows-x64.zip FolderOrganizer-Rust-Windows-x64.zip SHA256SUMS.txt --repo P-JSL/Folder_Organizer --draft --verify-tag --target $env:GITHUB_SHA --title "Folder Organizer $tag · Python / Rust" --notes-file "docs/RELEASE_NOTES_$version.md"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release edit $tag --repo P-JSL/Folder_Organizer --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Preserve compiler cache
+        if: always() && steps.rust_cache.outputs.cache-primary-key != '' && steps.rust_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust-app/target
+          key: ${{ steps.rust_cache.outputs.cache-primary-key }}
