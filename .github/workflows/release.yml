@@ -39,6 +39,19 @@ jobs:
           }
       - name: Verify compiled GUI, inventory and automatic update helper
         run: python scripts/windows_package_smoke.py
+      - name: Sign first-party Windows executables if configured
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+          WINDOWS_SIGNING_REQUIRED: ${{ vars.WINDOWS_SIGNING_REQUIRED }}
+          WINDOWS_SIGNING_TRUST_MODE: ${{ vars.WINDOWS_SIGNING_TRUST_MODE }}
+          WINDOWS_SIGNING_TIMESTAMP_URL: ${{ vars.WINDOWS_SIGNING_TIMESTAMP_URL }}
+        run: |
+          ./scripts/sign_windows_artifacts.ps1 -Files @(
+            'dist/FolderOrganizer/FolderOrganizer.exe',
+            'dist/FolderOrganizer/FolderOrganizerUpdater.exe'
+          )
       - name: Package and checksum
         shell: pwsh
         run: |
