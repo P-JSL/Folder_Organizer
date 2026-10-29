@@ -47,6 +47,22 @@ jobs:
         run: cargo +1.99.1 build --manifest-path rust-app/Cargo.toml --locked --target x86_64-pc-windows-msvc --release --features gui --bins
       - name: Reuse existing dependency notices
         run: gh release download v0.6.0 --repo P-JSL/Folder_Organizer --pattern FolderOrganizer-Rust-Windows-x64.zip --dir reuse
+      - name: Sign first-party Windows executables if configured
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+          WINDOWS_SIGNING_REQUIRED: ${{ vars.WINDOWS_SIGNING_REQUIRED }}
+          WINDOWS_SIGNING_TRUST_MODE: ${{ vars.WINDOWS_SIGNING_TRUST_MODE }}
+          WINDOWS_SIGNING_TIMESTAMP_URL: ${{ vars.WINDOWS_SIGNING_TIMESTAMP_URL }}
+        run: |
+          ./scripts/sign_windows_artifacts.ps1 -Files @(
+            'dist/FolderOrganizer/FolderOrganizer.exe',
+            'dist/FolderOrganizer/FolderOrganizerUpdater.exe',
+            'rust-app/target/x86_64-pc-windows-msvc/release/FolderOrganizerRust.exe',
+            'rust-app/target/x86_64-pc-windows-msvc/release/FolderOrganizerRustCLI.exe',
+            'rust-app/target/x86_64-pc-windows-msvc/release/FolderOrganizerRustUpdater.exe'
+          )
       - name: Package both editions and generate release checksums
         run: python scripts/package_version_release.py
       - name: Publish both editions as the new stable release

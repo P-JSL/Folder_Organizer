@@ -20,7 +20,7 @@ Windows에서 **내 컴퓨터의 폴더**를 선택해 파일을 살펴보고, �
 2. ZIP 전체를 압축 해제한 뒤 Python은 `FolderOrganizer/FolderOrganizer.exe`, Rust는 `FolderOrganizerRust/FolderOrganizerRust.exe`를 실행합니다. 각 ZIP의 도우미·라이선스 파일과 Python의 `_internal` 폴더도 함께 보관해야 합니다.
 3. **폴더 선택 → 분석**으로 시작합니다. 우선 작은 테스트 폴더에서 미리보기와 되돌리기를 확인하세요.
 
-Windows 배포판은 Windows 10/11 x64를 대상으로 하며 **Python 설치가 필요 없습니다**. 소스 실행에는 Python 3.11 이상이 필요합니다. 실행 파일은 코드 서명되지 않아 Windows에서 게시자 확인 알림을 표시할 수 있습니다. Windows·Linux CI에서 검증하며 실행 파일은 Windows 러너에서 빌드합니다. macOS는 소스 실행 구조를 갖추었지만 별도 패키지나 실기기 검증을 제공하지 않습니다.
+Windows 배포판은 Windows 10/11 x64를 대상으로 하며 **Python 설치가 필요 없습니다**. 소스 실행에는 Python 3.11 이상이 필요합니다. 실행 파일은 코드 서명되지 않아 Windows에서 게시자 확인 알림을 표시할 수 있습니다. 개발용 자체 서명 인증서 생성 및 GitHub Actions의 선택적 코드 서명 방법은 [Windows 코드 서명 안내](docs/WINDOWS_CODE_SIGNING.md)를 참고하세요. 자체 서명은 Windows의 공인 게시자 인증이나 SmartScreen 경고를 제거하지 않습니다. Windows·Linux CI에서 검증하며 실행 파일은 Windows 러너에서 빌드합니다. macOS는 소스 실행 구조를 갖추었지만 별도 패키지나 실기기 검증을 제공하지 않습니다.
 
 ## 기능
 

@@ -1,0 +1,59 @@
+name: Windows signing smoke test
+on:
+  pull_request:
+    paths:
+      - 'scripts/sign_windows_artifacts.ps1'
+      - 'scripts/setup_dev_signing.ps1'
+      - '.github/workflows/signing-smoke.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  development-signature:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate temporary development certificate and verify Authenticode
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert `
+            -Subject 'CN=FolderOrganizer CI Temporary Signing' `
+            -CertStoreLocation 'Cert:\CurrentUser\My' `
+            -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 `
+            -KeyExportPolicy Exportable -NotAfter (Get-Date).AddDays(2)
+          $password = [guid]::NewGuid().ToString('N')
+          $pfx = Join-Path $env:RUNNER_TEMP 'signing-smoke.pfx'
+          $sourceDirectory = Join-Path $env:RUNNER_TEMP 'signing-smoke-source'
+          $outputDirectory = Join-Path $env:RUNNER_TEMP 'signing-smoke-output'
+          $testExecutable = Join-Path $outputDirectory 'SigningSmoke.exe'
+          try {
+            $secure = ConvertTo-SecureString $password -AsPlainText -Force
+            Export-PfxCertificate -Cert $cert -FilePath $pfx -Password $secure | Out-Null
+            & dotnet new console --name SigningSmoke --output $sourceDirectory --no-restore
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create isolated test executable project.' }
+            & dotnet publish (Join-Path $sourceDirectory 'SigningSmoke.csproj') -c Release -r win-x64 --self-contained false -p:UseAppHost=true --output $outputDirectory
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $testExecutable)) {
+              throw 'Could not build unsigned smoke test EXE.'
+            }
+            $env:WINDOWS_SIGNING_PFX_BASE64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($pfx))
+            $env:WINDOWS_SIGNING_PFX_PASSWORD = $password
+            $env:WINDOWS_SIGNING_REQUIRED = 'true'
+            $env:WINDOWS_SIGNING_TRUST_MODE = 'development'
+            $env:WINDOWS_SIGNING_TIMESTAMP_URL = 'none'
+            ./scripts/sign_windows_artifacts.ps1 -Files @($testExecutable)
+            $signature = Get-AuthenticodeSignature -LiteralPath $testExecutable
+            if ($null -eq $signature.SignerCertificate -or
+                $signature.SignerCertificate.Thumbprint -ne $cert.Thumbprint) {
+              throw 'Signed EXE does not have the expected development certificate.'
+            }
+            Write-Host "Development Authenticode verified ($($signature.Status))."
+          }
+          finally {
+            Remove-Item -LiteralPath $pfx -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $sourceDirectory, $outputDirectory -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -Force -ErrorAction SilentlyContinue
+            Remove-Item Env:WINDOWS_SIGNING_PFX_BASE64 -ErrorAction SilentlyContinue
+            Remove-Item Env:WINDOWS_SIGNING_PFX_PASSWORD -ErrorAction SilentlyContinue
+          }

@@ -47,6 +47,22 @@ jobs:
         run: cargo +1.99.1 build --manifest-path rust-app/Cargo.toml --locked --target x86_64-pc-windows-msvc --release --features gui --bins
       - name: Package native Rust edition and dependency notices
         run: python scripts/package_rust.py --binaries rust-app/target/x86_64-pc-windows-msvc/release
+      - name: Sign first-party Windows executables if configured
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+          WINDOWS_SIGNING_REQUIRED: ${{ vars.WINDOWS_SIGNING_REQUIRED }}
+          WINDOWS_SIGNING_TRUST_MODE: ${{ vars.WINDOWS_SIGNING_TRUST_MODE }}
+          WINDOWS_SIGNING_TIMESTAMP_URL: ${{ vars.WINDOWS_SIGNING_TIMESTAMP_URL }}
+        run: |
+          ./scripts/sign_windows_artifacts.ps1 -Files @(
+            'dist/FolderOrganizer/FolderOrganizer.exe',
+            'dist/FolderOrganizer/FolderOrganizerUpdater.exe',
+            'dist/FolderOrganizerRust/FolderOrganizerRust.exe',
+            'dist/FolderOrganizerRust/FolderOrganizerRustCLI.exe',
+            'dist/FolderOrganizerRust/FolderOrganizerRustUpdater.exe'
+          )
       - name: Reuse passed Rust and Python Windows checks
         env:
           GH_TOKEN: ${{ github.token }}

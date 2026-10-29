@@ -113,7 +113,8 @@ def test_payload_reference_and_retirement_intent_are_durable_before_raw_retireme
     root, _sources, result = removed(tmp_path, [b"data" * 300_000])
     original = ops._remove_verified_private
     inspected = []
-    def inspect(path, fingerprint):
+    def inspect(path, fingerprint, *, compaction=False):
+        assert compaction is True
         key = ops._key(root / ops.STATE_DIRECTORY)
         record = ops._read_journal(Path(result["journal_path"]), root, key)
         item = record["items"][0]
@@ -121,7 +122,7 @@ def test_payload_reference_and_retirement_intent_are_durable_before_raw_retireme
         assert item["target_compaction"]["state"] == "retire_pending"
         payload.verify_payload(root, item["target_payload"])
         inspected.append(path)
-        return original(path, fingerprint)
+        return original(path, fingerprint, compaction=compaction)
     monkeypatch.setattr(ops, "_remove_verified_private", inspect)
     assert ops.compact_operation(root, result["id"])["recovery_compaction"]["status"] == "completed"
     assert len(inspected) == 1
