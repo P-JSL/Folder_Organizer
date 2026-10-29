@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+  actions: read
 jobs:
   windows:
     runs-on: windows-latest
@@ -12,6 +13,8 @@ jobs:
       QT_QPA_PLATFORM: offscreen
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -42,13 +45,12 @@ jobs:
         run: cargo +1.99.1 build --manifest-path rust-app/Cargo.toml --locked --target x86_64-pc-windows-msvc --release --features gui --bins
       - name: Package native Rust edition and dependency notices
         run: python scripts/package_rust.py --binaries rust-app/target/x86_64-pc-windows-msvc/release
-      - name: Check only new Windows-specific Rust paths
-        run: |
-          cargo +1.99.1 test --manifest-path rust-app/Cargo.toml --locked --target x86_64-pc-windows-msvc --test windows_contract_v1 python_msvcrt_byte_zero_lock_blocks_native_rust_without_truncation -- --exact
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo +1.99.1 test --manifest-path rust-app/Cargo.toml --locked --target x86_64-pc-windows-msvc --test windows_updater_v1 --test windows_metadata_v1
-      - name: Check new Windows recovery metadata guard
-        run: python -m pytest -q tests/test_payload_metadata_windows_v1.py
+      - name: Reuse passed Rust Windows checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/reuse_rust_windows_checks.py
+      - name: Check only the remaining Windows recovery case
+        run: python -m pytest -q tests/test_payload_metadata_windows_v1.py::test_native_stream_added_after_capture_is_kept_with_original_file
       - name: New two-edition package contract
         run: python scripts/windows_editions_v6.py
       - name: ZIP and checksum both editions

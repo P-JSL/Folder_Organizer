@@ -86,3 +86,48 @@ def test_capture_rechecks_metadata_before_retiring_raw_copy(tmp_path, monkeypatc
     monkeypatch.setattr(payload, "materialize", no_primary_only_fallback)
     assert ops.undo_operation(root, operation["id"])["status"] == "undone"
     assert source.read_bytes() == raw
+
+
+@pytest.mark.parametrize("change_primary", [False, True])
+def test_ads_lastwrite_capture_refreshes_only_verified_same_primary(tmp_path, monkeypatch, change_primary):
+    """NTFS ADS writes may update LastWriteTime even with unchanged main bytes."""
+    import os
+    root = tmp_path / "Documents"
+    root.mkdir()
+    source = root / "original.txt"
+    raw = b"original bytes and metadata\n" * 4096
+    source.write_bytes(raw)
+    operation = ops.execute_plan(ops.build_plan(root, [str(source)], "quarantine"))
+    target = Path(operation["items"][0]["target"])
+    previous_mtime = operation["items"][0]["mtime_ns"]
+    rename = ops._rename_anchored
+    def late_metadata(original, captured):
+        rename(original, captured)
+        if captured.name.startswith(".compact-"):
+            if change_primary:
+                captured.write_bytes(b"Y" + raw[1:])
+            info = captured.stat()
+            os.utime(captured, ns=(info.st_atime_ns, previous_mtime + 2_000_000_000))
+    def metadata(path):
+        return (0, ("::$DATA", ":late:$DATA")) if Path(path).name.startswith(".compact-") else (0, ("::$DATA",))
+    def no_primary_only_fallback(*args, **kwargs):
+        raise AssertionError("An ADS refusal cannot restore a primary-only recipe")
+    monkeypatch.setattr(ops, "_rename_anchored", late_metadata)
+    monkeypatch.setattr(payload, "_WINDOWS", True)
+    monkeypatch.setattr(payload, "_windows_compaction_metadata", metadata)
+    monkeypatch.setattr(payload, "materialize", no_primary_only_fallback)
+    result = ops.compact_operation(root, operation["id"])
+    item = result["items"][0]
+    assert result["recovery_compaction"]["processed"] == 0
+    assert "target_payload" not in item and item["target_packed"] is False
+    assert item["target_compaction"]["state"] == "raw_metadata_retained"
+    if change_primary:
+        assert item["mtime_ns"] == previous_mtime
+        assert "raw_snapshot_warning" in item["target_compaction"]
+        assert ops.undo_operation(root, operation["id"])["status"] == "partial_undo"
+        assert target.read_bytes() == b"Y" + raw[1:] and not source.exists()
+    else:
+        assert item["mtime_ns"] == previous_mtime + 2_000_000_000
+        assert item["target_compaction"]["raw_snapshot_refreshed"] is True
+        assert ops.undo_operation(root, operation["id"])["status"] == "undone"
+        assert source.read_bytes() == raw

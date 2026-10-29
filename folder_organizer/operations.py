@@ -1051,6 +1051,9 @@ def compaction_preview(root: str | Path, operation_id: str, *, progress_detail=N
 
 def _remove_verified_private(path: Path, fingerprint: dict, *, compaction: bool = False) -> int:
     """Retire an exclusively captured app-owned raw copy after verification."""
+    if compaction:
+        from . import recovery_payload
+        recovery_payload.compaction_preflight(path)
     _verify(path, fingerprint)
     info = path.lstat()
     with _directory_descriptor(path.parent) as parent:
@@ -1121,6 +1124,7 @@ def compact_operation(root: str | Path, operation_id: str, *, plan: dict | None 
                     original = _private_recovery_path(journal, item, field, directory)
                     if str(original) != candidate["original_path"] or source.parent != original.parent:
                         raise OperationError("최적화 대상의 비공개 경로가 바뀌었습니다.")
+                    recovery_payload.compaction_preflight(source)
                     _verify(source, fingerprint)
                     content = (fingerprint["sha256"], fingerprint["size"])
                     def prepared(descriptor):
@@ -1139,6 +1143,10 @@ def compact_operation(root: str | Path, operation_id: str, *, plan: dict | None 
                         raise OperationError("캡처 경로 충돌이 있어 기존 보관본을 유지합니다.")
                     _rename_anchored(source, holding)
                     captured = True
+                    # ADS creation can change NTFS's primary LastWriteTime.
+                    # Classify that refusal before a generic snapshot error so
+                    # a primary-only recipe cannot remain an active fallback.
+                    recovery_payload.compaction_preflight(holding)
                     _verify(holding, fingerprint)  # preserve unexpected post-capture changes
                     recovery_payload.verify_payload(directory, descriptor)
                     item[field + "_packed"] = True
@@ -1167,6 +1175,20 @@ def compact_operation(root: str | Path, operation_id: str, *, plan: dict | None 
                         retained = item.setdefault(field + "_compaction", {})
                         retained.update(state="raw_metadata_retained", raw_path=str(source),
                                         metadata_warning=str(exc))
+                        try:
+                            current = _fingerprint(holding if captured else source)
+                            if any(current[name] != fingerprint[name]
+                                   for name in ("size", "device", "inode", "sha256")):
+                                raise OperationError("내용 또는 파일 식별자가 바뀌어 보관본의 날짜를 갱신하지 않습니다.")
+                            # Record this metadata-only change only after a
+                            # complete byte hash and physical identity match.
+                            retained["fingerprint"] = current
+                            if (field == "target" and item.get("deletion_storage") == "delete_files"
+                                    and source.exists() and _same(source.lstat(), current)):
+                                item["mtime_ns"] = current["mtime_ns"]
+                                retained["raw_snapshot_refreshed"] = True
+                        except (OSError, OperationError) as snapshot_error:
+                            retained["raw_snapshot_warning"] = str(snapshot_error)
                     summary["skipped"] += 1
                     summary["warnings"].append(f"보관본 유지: {source} · {exc}")
                     _execution_event("execution.item", execution_id=operation_id, action="compact", status="unchanged",
