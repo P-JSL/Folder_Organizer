@@ -57,7 +57,14 @@ if ($trustMode -notin @('development', 'public')) {
 }
 $timestampUrl = $env:WINDOWS_SIGNING_TIMESTAMP_URL
 if ([string]::IsNullOrWhiteSpace($timestampUrl)) { $timestampUrl = 'http://timestamp.digicert.com' }
-if ($timestampUrl -notmatch '^https?://') { throw 'Invalid timestamp server URL.' }
+$timestampOptions = @()
+if ($timestampUrl -eq 'none') {
+    if ($trustMode -ne 'development') { throw 'Public-trust signing requires an RFC 3161 timestamp.' }
+    Write-Warning 'Development signing without a timestamp. The signature will not outlive certificate validity.'
+} else {
+    if ($timestampUrl -notmatch '^https?://') { throw 'Invalid timestamp server URL.' }
+    $timestampOptions = @('/tr', $timestampUrl, '/td', 'SHA256')
+}
 
 $signTool = Find-SignTool
 $pfx = Join-Path $env:RUNNER_TEMP ('signing-' + [guid]::NewGuid().ToString('N') + '.pfx')
@@ -81,7 +88,7 @@ try {
             throw 'The certificate is not currently valid.'
         }
         foreach ($target in $targets) {
-            & $signTool sign /f $pfx /p $password /fd SHA256 /tr $timestampUrl /td SHA256 $target
+            & $signTool sign /f $pfx /p $password /fd SHA256 @timestampOptions $target
             if ($LASTEXITCODE -ne 0) { throw "SignTool signing failed: $target" }
             $signature = Get-AuthenticodeSignature -LiteralPath $target
             if ($null -eq $signature.SignerCertificate -or
