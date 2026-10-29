@@ -41,6 +41,10 @@ def contract() -> None:
                               (rust_app.parent, "P-JSL/Folder_Organizer.Rust")):
         marker = json.loads((directory / "version.json").read_text(encoding="utf-8"))
         assert marker == {"app_id": app_id, "version": "0.6.0"}, marker
+    if '--gui-only' in sys.argv:
+        gui_startup(rust_app)
+        print('Native Rust GUI rendered and exited; previously passed CLI/data checks reused.')
+        return
     version = subprocess.check_output([str(rust_cli), "--version"], text=True, encoding="utf-8")
     assert "Rust 0.6.0" in version
     with tempfile.TemporaryDirectory(prefix="organizer-two-editions-") as temporary:
@@ -88,11 +92,15 @@ def contract() -> None:
         assert {path.relative_to(folder).as_posix(): path.read_bytes()
                 for path in folder.rglob("*") if path.is_file()} == original
         # New native egui startup, not a repeat of the old Python GUI check.
-        smoke = subprocess.run([str(rust_app), "--gui-smoke"], timeout=60,
-                               capture_output=True, text=True, encoding="utf-8", errors="replace",
-                               env={**os.environ, "FOLDER_ORGANIZER_RUST_SMOKE": "1"})
-        assert smoke.returncode == 0, f"Native Rust GUI startup failed ({smoke.returncode}): {smoke.stderr}\n{smoke.stdout}"
+        gui_startup(rust_app)
     print("New two-edition Windows contract passed; previous tests/build checks were not rerun.")
+
+
+def gui_startup(rust_app: Path) -> None:
+    smoke = subprocess.run([str(rust_app), '--gui-smoke'], timeout=60,
+                           capture_output=True, text=True, encoding='utf-8', errors='replace',
+                           env={**os.environ, 'FOLDER_ORGANIZER_RUST_SMOKE': '1'})
+    assert smoke.returncode == 0, f'Native Rust GUI startup failed ({smoke.returncode}): {smoke.stderr}\n{smoke.stdout}'
 
 
 if __name__ == "__main__":

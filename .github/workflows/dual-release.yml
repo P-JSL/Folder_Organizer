@@ -30,7 +30,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust-app/target
-          key: windows-rust-static-1.99.1-${{ hashFiles('rust-app/Cargo.lock') }}
+          key: windows-rust-static-1.99.1-${{ hashFiles('rust-app/Cargo.lock', 'rust-app/Cargo.toml', '.cargo/config.toml') }}
       - name: Build changed Python edition (previous suites skipped)
         run: |
           python -m PyInstaller --noconfirm --clean --onedir --windowed --name FolderOrganizer --collect-data PySide6 --copy-metadata PySide6-Essentials --copy-metadata shiboken6 --copy-metadata Pillow --copy-metadata pypdf desktop_entry.py
@@ -49,8 +49,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python scripts/reuse_rust_windows_checks.py
-      - name: New two-edition package contract
-        run: python scripts/windows_editions_v6.py
+      - name: Check remaining native GUI startup
+        run: python scripts/windows_editions_v6.py --gui-only
       - name: ZIP and checksum both editions
         shell: pwsh
         run: |

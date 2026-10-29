@@ -2567,8 +2567,62 @@ impl eframe::App for OrganizerApp {
     }
 }
 
+fn desktop_renderer_options() -> (eframe::Renderer, eframe::egui_wgpu::WgpuConfiguration) {
+    if !cfg!(windows) {
+        return (eframe::Renderer::Glow, Default::default());
+    }
+
+    use eframe::{egui_wgpu, wgpu};
+    let mut setup = egui_wgpu::WgpuSetupCreateNew::default();
+    // RDP and GPU-less Windows machines can expose only OpenGL 1.1. DX12
+    // enumerates WARP as a CPU adapter, so retain it after compatible GPUs.
+    setup.instance_descriptor.backends = wgpu::Backends::DX12;
+    // FXC is supplied by Windows; the portable ZIP needs no DXC sidecar DLLs.
+    setup.instance_descriptor.backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::Fxc;
+    let device_descriptor = setup.device_descriptor.clone();
+    setup.native_adapter_selector = Some(Arc::new(move |adapters, surface| {
+        let chosen = adapters
+            .iter()
+            .filter(|adapter| {
+                let required = device_descriptor(adapter);
+                surface.is_none_or(|surface| adapter.is_surface_supported(surface))
+                    && required.required_limits.check_limits(&adapter.limits())
+                    && adapter.features().contains(required.required_features)
+            })
+            .min_by_key(|adapter| match adapter.get_info().device_type {
+                wgpu::DeviceType::DiscreteGpu => 0,
+                wgpu::DeviceType::IntegratedGpu => 1,
+                wgpu::DeviceType::VirtualGpu => 2,
+                wgpu::DeviceType::Other => 3,
+                wgpu::DeviceType::Cpu => 4,
+            })
+            .cloned()
+            .ok_or_else(|| {
+                "DirectX 12 화면을 표시할 수 있는 GPU 또는 Windows WARP 소프트웨어 어댑터가 없습니다. Windows 그래픽 드라이버와 원격 세션 설정을 확인하세요.".to_owned()
+            })?;
+        let info = chosen.get_info();
+        eprintln!(
+            "Folder Organizer Rust renderer: Wgpu/DX12; adapter: {} ({:?}); software fallback: {}",
+            info.name,
+            info.device_type,
+            info.device_type == wgpu::DeviceType::Cpu
+        );
+        Ok(chosen)
+    }));
+    (
+        eframe::Renderer::Wgpu,
+        egui_wgpu::WgpuConfiguration {
+            wgpu_setup: setup.into(),
+            ..Default::default()
+        },
+    )
+}
+
 pub fn run() -> eframe::Result<()> {
+    let (renderer, wgpu_options) = desktop_renderer_options();
     let options = eframe::NativeOptions {
+        renderer,
+        wgpu_options,
         viewport: egui::ViewportBuilder::default()
             .with_title(format!("Folder Organizer Rust {VERSION}"))
             .with_inner_size([1250.0, 820.0])
