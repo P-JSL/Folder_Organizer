@@ -162,9 +162,15 @@ fn python_msvcrt_byte_zero_lock_blocks_native_rust_without_truncation() {
     assert_eq!(ready.trim(), "locked");
     assert!(operations::execute(&plan, &AtomicBool::new(false), None).is_err());
     assert_eq!(fs::read(&source).unwrap(), b"unchanged original");
-    assert_eq!(fs::read(&lock).unwrap(), b"preserved shared lock contents");
+    // Windows byte locks also reject overlapping reads. Inspect length while
+    // the external owner holds byte zero, then inspect bytes after it unlocks.
+    assert_eq!(
+        fs::metadata(&lock).unwrap().len(),
+        b"preserved shared lock contents".len() as u64
+    );
     child.0.stdin.take().unwrap().write_all(b"x").unwrap();
     assert!(child.0.wait().unwrap().success());
+    assert_eq!(fs::read(&lock).unwrap(), b"preserved shared lock contents");
     assert!(
         operations::execute(&plan, &AtomicBool::new(false), None)
             .unwrap()
