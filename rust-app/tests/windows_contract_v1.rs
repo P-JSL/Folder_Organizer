@@ -172,3 +172,31 @@ fn python_msvcrt_byte_zero_lock_blocks_native_rust_without_truncation() {
     );
     assert_eq!(fs::read(lock).unwrap(), b"preserved shared lock contents");
 }
+
+#[test]
+fn original_and_verbatim_windows_paths_build_and_execute_the_same_safe_plan() {
+    let f = Fixture::new();
+    let original = f.write("ordinary.txt", b"ordinary Windows path");
+    let second = f.write("verbatim.txt", b"verbatim Windows path");
+    let verbatim = fs::canonicalize(&second).unwrap();
+    assert!(matches!(
+        verbatim.components().next(),
+        Some(std::path::Component::Prefix(prefix))
+            if matches!(prefix.kind(), std::path::Prefix::VerbatimDisk(_))
+    ));
+    let scan = f.scan();
+    let cancel = AtomicBool::new(false);
+    for (path, bytes) in [
+        (original, b"ordinary Windows path".as_slice()),
+        (verbatim, b"verbatim Windows path".as_slice()),
+    ] {
+        let plan = operations::plan_files(&scan, &[path], None, TransferKind::Delete)
+            .expect("a complete Windows path must not stat its bare drive prefix");
+        let receipt = operations::execute(&plan, &cancel, None).unwrap();
+        assert!(receipt.completed, "{:?}", receipt.errors);
+        assert_eq!(fs::read(&receipt.items[0].target).unwrap(), bytes);
+        let restored = operations::undo(&f.0, &receipt.id, &cancel, None).unwrap();
+        assert!(restored.completed, "{:?}", restored.errors);
+        assert_eq!(fs::read(&receipt.items[0].source).unwrap(), bytes);
+    }
+}

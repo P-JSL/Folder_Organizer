@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tomllib
@@ -25,6 +26,21 @@ def package(binaries: Path, destination: Path) -> None:
         with source.open("rb") as stream:
             if stream.read(2) != b"MZ":
                 raise ValueError(f"Not a Windows executable: {name}")
+        import pefile  # installed by PyInstaller on the native Windows runner
+        pe = pefile.PE(str(source), fast_load=True)
+        try:
+            pe.parse_data_directories(directories=[
+                pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"],
+                pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT"],
+            ])
+            imports = [entry.dll.decode("ascii", errors="replace") for kind in (
+                "DIRECTORY_ENTRY_IMPORT", "DIRECTORY_ENTRY_DELAY_IMPORT")
+                for entry in getattr(pe, kind, [])]
+            external_crt = [dll for dll in imports if re.match(r"(?i)(vcruntime|msvcp|concrt)\d", dll)]
+            if external_crt:
+                raise ValueError(f"Portable Rust program requires external VC++ runtime: {name}: {external_crt}")
+        finally:
+            pe.close()
     metadata = json.loads(subprocess.check_output([
         "cargo", "metadata", "--manifest-path", str(RUST / "Cargo.toml"),
         "--locked", "--format-version", "1", "--features", "gui",

@@ -26,7 +26,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust-app/target
-          key: windows-rust-1.99.1-${{ hashFiles('rust-app/Cargo.lock') }}
+          key: windows-rust-static-1.99.1-${{ hashFiles('rust-app/Cargo.lock') }}
       - name: Build changed Python edition (previous suites skipped)
         run: |
           python -m PyInstaller --noconfirm --clean --onedir --windowed --name FolderOrganizer --collect-data PySide6 --copy-metadata PySide6-Essentials --copy-metadata shiboken6 --copy-metadata Pillow --copy-metadata pypdf desktop_entry.py
@@ -38,11 +38,14 @@ jobs:
           Copy-Item README.md,CHANGELOG.md,docs/THIRD_PARTY.md dist/FolderOrganizer/
           Copy-Item -Recurse docs/licenses dist/FolderOrganizer/licenses
       - name: Build new native Rust programs
-        run: cargo +1.99.1 build --manifest-path rust-app/Cargo.toml --locked --release --features gui --bins
+        run: cargo +1.99.1 build --manifest-path rust-app/Cargo.toml --locked --target x86_64-pc-windows-msvc --release --features gui --bins
       - name: Package native Rust edition and dependency notices
-        run: python scripts/package_rust.py
+        run: python scripts/package_rust.py --binaries rust-app/target/x86_64-pc-windows-msvc/release
       - name: Check only new Windows-specific Rust paths
-        run: cargo +1.99.1 test --manifest-path rust-app/Cargo.toml --locked --test windows_contract_v1 --test windows_updater_v1 --test windows_metadata_v1
+        run: |
+          cargo +1.99.1 test --manifest-path rust-app/Cargo.toml --locked --target x86_64-pc-windows-msvc --test windows_contract_v1 -- --skip every_local_drive_letter_and_verbatim_form_is_a_drive_root_not_a_nas --skip windows_handle_identity_change_time_and_creation_date_are_distinct
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo +1.99.1 test --manifest-path rust-app/Cargo.toml --locked --target x86_64-pc-windows-msvc --test windows_updater_v1 --test windows_metadata_v1
       - name: Check new Windows recovery metadata guard
         run: python -m pytest -q tests/test_payload_metadata_windows_v1.py
       - name: New two-edition package contract

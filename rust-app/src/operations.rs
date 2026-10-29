@@ -305,6 +305,13 @@ fn plain(path: &Path) -> AppResult<()> {
             return Err("상위 폴더 경로는 사용할 수 없습니다.".into());
         }
         cursor.push(part.as_os_str());
+        // A Windows prefix is not a complete filesystem path. In particular,
+        // canonical paths begin with a verbatim prefix such as `\\?\C:`,
+        // which cannot be queried until RootDir completes its real anchor.
+        // Every actual root and subsequent component is still checked below.
+        if matches!(part, Component::Prefix(_)) {
+            continue;
+        }
         match fs::symlink_metadata(&cursor) {
             Ok(m) if m.file_type().is_symlink() || is_reparse(&m) => {
                 return Err(format!(
@@ -1514,20 +1521,6 @@ pub fn keep_first(
 fn verify_keeper(item: &JournalItem) -> AppResult<()> {
     if let Some((path, expected)) = &item.keeper {
         assert_snapshot(path, expected)?;
-    }
-    Ok(())
-}
-fn captured_matches(
-    path: &Path,
-    expected: &FileSnapshot,
-    sha: Option<&str>,
-    cancel: &AtomicBool,
-) -> AppResult<()> {
-    assert_snapshot(path, expected)?;
-    if let Some(sha) = sha {
-        if hash_file(path, cancel)? != sha {
-            return Err("보관 파일의 내용이 변경되어 복원하지 않습니다.".into());
-        }
     }
     Ok(())
 }

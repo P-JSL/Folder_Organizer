@@ -1,0 +1,4 @@
+[target.x86_64-pc-windows-msvc]
+# Keep the Rust portable apps independent of an installed VC++ redistributable.
+# An explicit --target keeps this flag out of host-side procedural macros.
+rustflags = ["-C", "target-feature=+crt-static"]

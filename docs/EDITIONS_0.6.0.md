@@ -47,6 +47,8 @@ cargo run --manifest-path rust-app/Cargo.toml --locked --bin FolderOrganizerRust
 cargo build --manifest-path rust-app/Cargo.toml --locked --release --features gui --bins
 ```
 
+Windows 정식 패키지는 `--target x86_64-pc-windows-msvc`를 명시해 빌드합니다. 저장소의 `.cargo/config.toml`은 이 대상의 C 런타임을 정적으로 연결하며, 패키징할 때 별도 VC++ 런타임 DLL이 필요한지도 확인합니다.
+
 콘솔 분석은 읽기 전용이고 기존 보고서 파일을 덮어쓰지 않습니다. 파일 변경은 데스크톱 앱에서 수행합니다. Windows 실행 파일은 Windows에서 빌드하며 Linux의 빌드 성공을 Windows 실행 성공으로 대신하지 않습니다.
 
 ## 기존에 통과한 검사는 재사용
