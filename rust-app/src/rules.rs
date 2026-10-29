@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 pub const GUIDELINES: &str = "규칙은 위에서 아래로 첫 일치 하나만 적용합니다. 처음에는 복사로 시험하세요. {규칙}/{종류}/{수정일:%Y/%m}처럼 폴더를 매핑합니다. 생성일이 제공되지 않는 파일은 생성일 규칙에서 건너뜁니다. 같은 이름은 덮어쓰지 않으며 미리보기 후 실행합니다.";
+const MISSING_CREATION_DATE: &str = "생성일이 제공되지 않아 해당 규칙을 건너뜁니다.";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -241,9 +242,7 @@ fn relative_path(value: &str) -> AppResult<PathBuf> {
 fn moment(entry: &FileEntry, basis: &str) -> AppResult<DateTime<Local>> {
     let ns = match basis {
         "modified" => entry.modified_ns,
-        "created" => entry
-            .created_ns
-            .ok_or("생성일이 제공되지 않아 해당 규칙을 건너뜁니다.")?,
+        "created" => entry.created_ns.ok_or(MISSING_CREATION_DATE)?,
         _ => return Err("날짜 기준은 modified 또는 created입니다.".into()),
     };
     let sec =
@@ -512,7 +511,11 @@ pub fn classification_preview(
                 let date = match moment(entry, &rule.date_basis) {
                     Ok(d) => d.date_naive(),
                     Err(e) => {
+                        let missing_creation = e == MISSING_CREATION_DATE;
                         plan.warnings.push(format!("{}: {e}", entry.relative_path));
+                        if missing_creation {
+                            continue;
+                        }
                         break;
                     }
                 };
@@ -525,7 +528,11 @@ pub fn classification_preview(
             let folder = match render_target(rule, entry) {
                 Ok(p) => p,
                 Err(e) => {
+                    let missing_creation = e == MISSING_CREATION_DATE;
                     plan.warnings.push(format!("{}: {e}", entry.relative_path));
+                    if missing_creation {
+                        continue;
+                    }
                     break;
                 }
             };

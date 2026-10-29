@@ -2,6 +2,7 @@
 
 ## 0.6.0 — 2026-10-29 · Python / Rust
 
+- Reissue only the Rust Windows package at the same version: handle unsupported extended file-ID queries through verified same-handle legacy identities, refuse lossy Windows ADS/EFS transfers, and continue to later rules when a creation date is unavailable. Preserve the original release tag and Python asset; embed exact hotfix source/build receipts.
 - Add a separate native Rust desktop, console interface and independent update helper covering inventory, exact/similar review, recoverable operations, rules, merges, history, compact recovery data, health checks and reports.
 - Separate edition package identifiers, update assets and recovery journals; exclude both editions' metadata from inventories.
 - Reduce Python inventory path/pattern work, per-record memory and serialization overhead; optimize metadata summaries and bounded name-comparison/progress caches without weakening exact duplicate verification.

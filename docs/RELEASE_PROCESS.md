@@ -8,6 +8,12 @@
 
 Rust의 Windows 타깃은 MSVC C 런타임 정적 연결을 사용합니다. 앱 식별자·실행 폴더·업데이트 ZIP·복원 기록은 Python판과 구분합니다. 구 단일 Python 태그 워크플로는 v0.0~v0.5 계열로 제한하며, 새 릴리스에서 과거 전체 검사를 자동 반복하지 않습니다.
 
+## 같은 버전의 Rust판만 수정 재배포
+
+사용자가 같은 버전으로 Rust판만 교체하라고 지시하면 `Rust-only formal hotfix build` (`rust-hotfix.yml`)를 수정 소스 커밋에서 실행합니다. Python은 빌드하지 않고 기존 공개 ZIP의 자산 ID·SHA-256을 보존합니다. 이미 통과한 전체 검사 대신 수정 경로의 새 회귀 사례와 실제 Rust 배포 실행 파일만 확인합니다.
+
+성공한 정식 빌드의 Rust ZIP·체크섬·소스 기록을 내려받아 검증한 뒤 기존 릴리스의 Rust ZIP과 공통 `SHA256SUMS.txt`만 교체합니다. 기존 버전 태그는 이동하지 않습니다. 실제 수정본 소스·워크플로 실행은 ZIP의 `BUILD_INFO.json`과 릴리스 설명에 명시합니다. 동일 버전은 기존 앱의 버전 비교에서 새 업데이트로 인식되지 않으므로 ZIP을 다시 받아 실행해야 합니다.
+
 ## v0.5 계열의 기존 절차
 
 먼저 `main`의 Windows·Linux 검사를 통과한 커밋에서 **Windows release → Run workflow**로 검토용 빌드를 만듭니다. 수동 실행은 릴리스를 게시하지 않습니다. 완료된 작업의 `FolderOrganizer-Windows-x64` 아티팩트에는 portable ZIP과 `SHA256SUMS.txt`가 들어 있습니다.

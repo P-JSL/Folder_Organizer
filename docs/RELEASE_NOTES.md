@@ -1,5 +1,14 @@
 **Folder Organizer v0.6.0 — Python판과 Rust판을 별도 Windows 정식 빌드로 제공합니다.**
 
+**2026-10-29 Rust판 수정 재배포 · 버전은 0.6.0 유지**
+
+- 일부 Windows 파일시스템·NAS가 확장 파일 ID 조회를 거부할 때 발생하던 `매개 변수가 틀립니다. (os error 87)`를 수정했습니다. 확장 조회가 지원되지 않을 때만 같은 열린 파일의 호환 ID를 사용합니다. 파일 변경 시각·고유 ID 검증은 유지하며, 고유성을 보장하지 않는 ReFS의 64비트 ID는 사용하지 않습니다.
+- Windows 복사·이동에서 추가 데이터 스트림 또는 EFS 속성을 빠뜨릴 수 있는 경로를 차단했습니다. 이를 보존할 수 없는 파일은 원본을 유지하고 이유를 표시합니다. 다운로드 파일의 `Zone.Identifier`나 스트림 조회를 지원하지 않는 NAS도 이 제한에 포함됩니다. 일반 파일·빈 파일의 복사·이동·복원과 추가 스트림을 가진 파일의 삭제 보관은 지원합니다.
+- 생성일이 없는 파일에 날짜 규칙을 적용할 때 다음 규칙까지 건너뛰던 문제를 수정했습니다.
+- Rust ZIP과 해당 체크섬만 교체합니다. Python ZIP과 기존 `v0.6.0` 태그는 그대로 유지하며, Rust ZIP의 `BUILD_INFO.json`에 실제 수정본 소스와 정식 빌드 정보를 기록합니다.
+
+같은 버전이므로 기존 Rust 0.6.0 앱은 자동 업데이트에서 수정본을 새 버전으로 인식하지 않습니다. Rust ZIP을 다시 받아 새 폴더에 압축 해제하고 실행하세요. 기존 작업의 복원에는 원래 데이터 폴더와 `.folder-organizer-rust` 기록을 그대로 사용합니다.
+
 | 다운로드 | 실행 파일 |
 | --- | --- |
 | [Python판 ZIP](https://github.com/P-JSL/Folder_Organizer/releases/download/v0.6.0/FolderOrganizer-Windows-x64.zip) | `FolderOrganizer/FolderOrganizer.exe` |

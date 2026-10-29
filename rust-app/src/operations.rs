@@ -35,6 +35,10 @@ thread_local! {
     static TEST_UNDO_AFTER_RETIRE:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};
     static TEST_DURABILITY_EVENTS:std::cell::RefCell<Vec<(String,PathBuf)>>=const{std::cell::RefCell::new(Vec::new())};
 }
+#[cfg(all(test, windows))]
+thread_local! {
+    static TEST_MOVE_ADS_AFTER_GUARD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1418,6 +1422,9 @@ pub fn plan_mapped(
         {
             return Err("검사 후 원본이 변경되었습니다.".into());
         }
+        if kind != TransferKind::Delete {
+            require_primary_stream_copy(&source)?;
+        }
         let requested = if kind == TransferKind::Delete {
             root.join("delete_files").join(source.file_name().unwrap())
         } else {
@@ -1565,6 +1572,7 @@ fn execute_delete(store: &mut Store, index: usize, cancel: &AtomicBool) -> AppRe
 fn create_staged_copy(store: &mut Store, index: usize, cancel: &AtomicBool) -> AppResult<()> {
     let mut item = store.journal.items[index].clone();
     assert_snapshot(&item.receipt.source, &item.original)?;
+    require_primary_stream_copy(&item.receipt.source)?;
     let parent = item
         .receipt
         .target
@@ -1628,6 +1636,7 @@ fn create_staged_copy(store: &mut Store, index: usize, cancel: &AtomicBool) -> A
     item.receipt.status = "publish_intent".into();
     store.checkpoint(index, item.clone())?;
     assert_snapshot(&item.receipt.source, &item.original)?;
+    require_primary_stream_copy(&item.receipt.source)?;
     exclusive_rename(&path, &item.receipt.target)?;
     let captured = core::snapshot(&item.receipt.target)?;
     if !same_file(&captured, item.staged_snapshot.as_ref().unwrap()) {
@@ -1641,6 +1650,7 @@ fn execute_move(store: &mut Store, index: usize, cancel: &AtomicBool) -> AppResu
     create_staged_copy(store, index, cancel)?;
     let mut item = store.journal.items[index].clone();
     assert_snapshot(&item.receipt.source, &item.original)?;
+    require_primary_stream_copy(&item.receipt.source)?;
     let backups = store
         .journal
         .root
@@ -1653,14 +1663,35 @@ fn execute_move(store: &mut Store, index: usize, cancel: &AtomicBool) -> AppResu
     item.receipt.status = "retire_intent".into();
     store.checkpoint(index, item.clone())?;
     assert_snapshot(&item.receipt.source, &item.original)?;
+    require_primary_stream_copy(&item.receipt.source)?;
+    #[cfg(all(test, windows))]
+    if TEST_MOVE_ADS_AFTER_GUARD.with(|flag| flag.replace(false)) {
+        let mut stream = item.receipt.source.as_os_str().to_os_string();
+        stream.push(":late-original-data");
+        fs::write(PathBuf::from(stream), b"late metadata bytes")
+            .map_err(|e| err("injected late metadata", e))?;
+        OpenOptions::new()
+            .write(true)
+            .open(&item.receipt.source)
+            .and_then(|file| {
+                file.set_times(fs::FileTimes::new().set_modified(
+                    core::time_from_ns(item.original.modified_ns).map_err(std::io::Error::other)?,
+                ))
+            })
+            .map_err(|e| err("injected original mtime", e))?;
+    }
     exclusive_rename(&item.receipt.source, &backup)?;
     let captured = core::snapshot(&backup)?;
-    if !same_file(&captured, &item.original) {
+    let metadata_warning = primary_stream_preservation_warning(&backup);
+    if !same_file(&captured, &item.original) || metadata_warning.is_some() {
         let rollback = exclusive_rename(&backup, &item.receipt.source);
         item.receipt.source_removed = rollback.is_err();
         item.backup_snapshot = Some(captured);
         store.checkpoint(index, item)?;
-        return Err("이동 중 원본이 변경되었습니다. 관련 파일을 모두 보존했습니다.".into());
+        return Err(format!(
+            "이동 중 원본 또는 추가 특성이 변경되었습니다. 관련 파일을 모두 보존했습니다. {}",
+            metadata_warning.unwrap_or_default()
+        ));
     }
     item.backup_snapshot = Some(captured);
     item.receipt.source_removed = true;
@@ -2361,7 +2392,7 @@ fn verify_recipe(root: &Path, recipe: &PackedFile, cancel: &AtomicBool) -> AppRe
 /// encrypted file or any named stream (including a zero-byte stream). Failure
 /// to enumerate is lack of proof, rather than evidence that no streams exist.
 #[cfg(windows)]
-fn packing_preservation_warning(path: &Path) -> Option<String> {
+fn primary_stream_preservation_warning(path: &Path) -> Option<String> {
     use std::os::windows::{ffi::OsStrExt, fs::MetadataExt};
     use windows_sys::Win32::{
         Foundation::{GetLastError, ERROR_HANDLE_EOF, INVALID_HANDLE_VALUE},
@@ -2372,19 +2403,13 @@ fn packing_preservation_warning(path: &Path) -> Option<String> {
     };
     let metadata = match fs::symlink_metadata(path) {
         Ok(m) => m,
-        Err(error) => {
-            return Some(format!(
-                "추가 데이터 확인 실패로 원시 보관본을 유지합니다: {error}"
-            ))
-        }
+        Err(error) => return Some(format!("추가 데이터 확인 실패: {error}")),
     };
     if metadata.file_attributes() & 0x4000 != 0 {
-        return Some(
-            "EFS 암호화 파일은 복원 특성을 유지하도록 압축하지 않고 원시 보관합니다.".into(),
-        );
+        return Some("EFS 암호화 특성은 기본 데이터 스트림만으로 보존할 수 없습니다.".into());
     }
     if !metadata.is_file() || metadata.file_type().is_symlink() || is_reparse(&metadata) {
-        return Some("일반 파일임을 확인할 수 없어 원시 보관본을 유지합니다.".into());
+        return Some("일반 파일임을 확인할 수 없습니다.".into());
     }
     let name: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let mut data: WIN32_FIND_STREAM_DATA = unsafe { std::mem::zeroed() };
@@ -2397,9 +2422,15 @@ fn packing_preservation_warning(path: &Path) -> Option<String> {
         )
     };
     if handle == INVALID_HANDLE_VALUE {
+        let code = unsafe { GetLastError() };
+        // A regular empty file may expose no streams at all. EOF is the
+        // documented successful end of enumeration, including at the start;
+        // other errors are still an unknown representation and must refuse.
+        if code == ERROR_HANDLE_EOF {
+            return None;
+        }
         return Some(format!(
-            "추가 스트림 조회를 지원하지 않거나 접근할 수 없어 원시 보관합니다 (Windows {}).",
-            unsafe { GetLastError() }
+            "추가 스트림 조회를 지원하지 않거나 접근할 수 없습니다 (Windows {code})."
         ));
     }
     struct StreamSearch(windows_sys::Win32::Foundation::HANDLE);
@@ -2419,11 +2450,11 @@ fn packing_preservation_warning(path: &Path) -> Option<String> {
             .unwrap_or(data.cStreamName.len());
         let stream = match String::from_utf16(&data.cStreamName[..length]) {
             Ok(s) => s,
-            Err(_) => return Some("추가 스트림 이름을 확인할 수 없어 원시 보관합니다.".into()),
+            Err(_) => return Some("추가 스트림 이름을 확인할 수 없습니다.".into()),
         };
         if !stream.eq_ignore_ascii_case("::$DATA") {
             return Some(
-                "NTFS 추가 데이터 스트림이 있어 해당 파일은 원시 보관본으로 유지합니다.".into(),
+                "NTFS 추가 데이터 스트림은 기본 데이터 스트림만으로 보존할 수 없습니다.".into(),
             );
         }
         if unsafe { FindNextStreamW(handle, &mut data as *mut _ as *mut std::ffi::c_void) } == 0 {
@@ -2432,16 +2463,36 @@ fn packing_preservation_warning(path: &Path) -> Option<String> {
                 None
             } else {
                 Some(format!(
-                    "추가 스트림 조회가 완료되지 않아 원시 보관합니다 (Windows {code})."
+                    "추가 스트림 조회가 완료되지 않았습니다 (Windows {code})."
                 ))
             };
         }
     }
-    Some("추가 스트림 조회 한도에 도달해 원시 보관본을 유지합니다.".into())
+    Some("추가 스트림 조회 한도에 도달했습니다.".into())
 }
 #[cfg(not(windows))]
-fn packing_preservation_warning(_path: &Path) -> Option<String> {
+fn primary_stream_preservation_warning(_path: &Path) -> Option<String> {
     None
+}
+
+fn packing_preservation_warning(path: &Path) -> Option<String> {
+    primary_stream_preservation_warning(path)
+        .map(|reason| format!("{reason} 원시 보관본을 유지합니다."))
+}
+
+/// Our streaming copy represents the unnamed stream only. Refuse metadata we
+/// cannot preserve instead of silently changing a copied/moved user's file.
+/// Deletion uses an exclusive same-filesystem rename and does not need this
+/// restriction. Check again at each publication/retirement boundary because
+/// a stream may be added after the preview.
+fn require_primary_stream_copy(path: &Path) -> AppResult<()> {
+    if let Some(reason) = primary_stream_preservation_warning(path) {
+        return Err(format!(
+            "{reason} 이 파일을 안전하게 복사·이동할 수 없어 중단했습니다. 원본을 유지합니다: {}",
+            path.display()
+        ));
+    }
+    Ok(())
 }
 
 enum PackOutcome {
@@ -2669,6 +2720,55 @@ pub fn compact(
     result.saved_bytes = result.original_bytes.saturating_sub(result.stored_bytes);
     let _ = store.compress_metadata();
     Ok(result)
+}
+
+#[cfg(all(test, windows))]
+mod copy_metadata_v6_unit {
+    use super::*;
+
+    #[test]
+    fn copy_metadata_v6_late_stream_at_move_capture_preserves_source_and_undo() {
+        struct Fixture(PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let fixture = Fixture(std::env::temp_dir().join(format!(
+            "organizer-late-move-stream-v6-{}",
+            random_id().unwrap()
+        )));
+        let root = fixture.0.join("source");
+        let destination = fixture.0.join("destination");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir(&destination).unwrap();
+        let source = root.join("original.txt");
+        fs::write(&source, b"original visible bytes").unwrap();
+        let cancel = AtomicBool::new(false);
+        let scan = core::scan(&root, &core::ScanOptions::default(), &cancel, None).unwrap();
+        let plan = plan_files(
+            &scan,
+            &[source.clone()],
+            Some(&destination),
+            TransferKind::Move,
+        )
+        .unwrap();
+        TEST_MOVE_ADS_AFTER_GUARD.with(|flag| flag.set(true));
+        let receipt = execute(&plan, &cancel, None).unwrap();
+        assert!(!receipt.completed);
+        assert!(!receipt.items[0].source_removed);
+        assert!(receipt.errors.iter().any(|e| e.contains("추가 특성")));
+        let mut stream = source.as_os_str().to_os_string();
+        stream.push(":late-original-data");
+        let stream = PathBuf::from(stream);
+        assert_eq!(fs::read(&source).unwrap(), b"original visible bytes");
+        assert_eq!(fs::read(&stream).unwrap(), b"late metadata bytes");
+        let restored = undo(&root, &receipt.id, &cancel, None).unwrap();
+        assert!(restored.completed, "{:?}", restored.errors);
+        assert_eq!(fs::read(&source).unwrap(), b"original visible bytes");
+        assert_eq!(fs::read(&stream).unwrap(), b"late metadata bytes");
+        assert!(!destination.join("original.txt").exists());
+    }
 }
 
 #[cfg(test)]
