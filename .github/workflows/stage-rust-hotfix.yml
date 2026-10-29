@@ -1,0 +1,73 @@
+name: Stage verified Rust hotfix assets
+run-name: Transfer verified Rust hotfix · ${{ inputs.build_run }}
+on:
+  workflow_dispatch:
+    inputs:
+      build_run:
+        description: Successful Rust-only formal build run
+        required: true
+        default: '40835739578'
+      source_commit:
+        description: Exact source commit of the completed formal build
+        required: true
+        default: d6d2028bf19787901530c71b71e508c472ce5866
+permissions:
+  contents: write
+  actions: read
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BUILD_RUN: ${{ inputs.build_run }}
+      BUILD_SOURCE: ${{ inputs.source_commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify completed formal source before transferring assets
+        run: |
+          python - <<'PY'
+          import json, os, subprocess
+          repo = os.environ['GITHUB_REPOSITORY']
+          run = os.environ['BUILD_RUN']
+          source = os.environ['BUILD_SOURCE']
+          assert repo == 'P-JSL/Folder_Organizer' and run.isdigit()
+          assert len(source) == 40 and all(c in '0123456789abcdef' for c in source)
+          data = json.loads(subprocess.check_output(['gh', 'api', f'repos/{repo}/actions/runs/{run}']))
+          assert data['status'] == 'completed' and data['conclusion'] == 'success'
+          assert data['head_sha'] == source and data['head_repository']['full_name'] == repo
+          assert data['path'] == '.github/workflows/rust-hotfix.yml'
+          assert not subprocess.check_output(['git', 'diff', '--name-only', source, 'HEAD', '--', 'rust-app', '.cargo', 'scripts/package_rust.py', 'scripts/windows_rust_hotfix_v6.py'])
+          print('Transfer only: formal build and prior successful tests are reused.')
+          PY
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.build_run }}
+          name: FolderOrganizer-Rust-Windows-x64-hotfix
+          path: verified-hotfix
+      - name: Stage existing verified files in an unpublished release
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          root = pathlib.Path('verified-hotfix')
+          source = os.environ['BUILD_SOURCE']
+          run = os.environ['BUILD_RUN']
+          repo = os.environ['GITHUB_REPOSITORY']
+          receipt = json.loads((root / 'Rust-BUILD_INFO.json').read_text())
+          proof = json.loads((root / 'Rust-VERIFICATION.json').read_text())
+          assert receipt['source_commit'] == proof['source_commit'] == source
+          assert receipt['workflow_run'] == run and receipt['version'] == proof['version'] == '0.6.0'
+          assert proof['native_gui_exit_code'] == 0
+          archive = root / 'FolderOrganizer-Rust-Windows-x64.zip'
+          checksum, name = (root / 'SHA256SUMS-Rust.txt').read_text().strip().split()
+          with archive.open('rb') as stream:
+              assert hashlib.file_digest(stream, 'sha256').hexdigest() == checksum
+          assert name == archive.name
+          tag = f'rust-v0.6.0-transfer-{run}'
+          assets = [archive, root/'SHA256SUMS-Rust.txt', root/'Rust-BUILD_INFO.json', root/'Rust-VERIFICATION.json']
+          subprocess.run(['gh', 'release', 'create', tag, *map(str, assets), '--repo', repo, '--draft', '--prerelease', '--target', source, '--title', 'Verified Rust v0.6.0 transfer', '--notes', f'Unpublished transfer of the completed formal build {run}; no rebuild or test rerun.'], check=True)
+          print(json.dumps({'tag': tag, 'source_commit': source, 'formal_run': run, 'rust_sha256': checksum}))
+          PY
