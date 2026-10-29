@@ -11,6 +11,11 @@ on:
         description: Exact source commit of the completed formal build
         required: true
         default: d6d2028bf19787901530c71b71e508c472ce5866
+      publish_release:
+        description: Replace verified Rust asset in existing v0.6.0 release
+        type: boolean
+        required: true
+        default: false
 permissions:
   contents: write
   actions: read
@@ -22,6 +27,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       BUILD_RUN: ${{ inputs.build_run }}
       BUILD_SOURCE: ${{ inputs.source_commit }}
+      PUBLISH_RELEASE: ${{ inputs.publish_release }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,7 +54,7 @@ jobs:
           run-id: ${{ inputs.build_run }}
           name: FolderOrganizer-Rust-Windows-x64-hotfix
           path: verified-hotfix
-      - name: Stage existing verified files in an unpublished release
+      - name: Transfer or publish existing verified files
         run: |
           python - <<'PY'
           import hashlib, json, os, pathlib, subprocess
@@ -68,6 +74,42 @@ jobs:
           assert name == archive.name
           tag = f'rust-v0.6.0-transfer-{run}'
           assets = [archive, root/'SHA256SUMS-Rust.txt', root/'Rust-BUILD_INFO.json', root/'Rust-VERIFICATION.json']
-          subprocess.run(['gh', 'release', 'create', tag, *map(str, assets), '--repo', repo, '--draft', '--prerelease', '--target', source, '--title', 'Verified Rust v0.6.0 transfer', '--notes', f'Unpublished transfer of the completed formal build {run}; no rebuild or test rerun.'], check=True)
-          print(json.dumps({'tag': tag, 'source_commit': source, 'formal_run': run, 'rust_sha256': checksum}))
+          if os.environ['PUBLISH_RELEASE'] == 'true':
+              # Publication reuses the exact already-verified ZIP. Preserve the
+              # original tag and published Python asset, even on a resumed upload.
+              assert checksum == '20e5e9caafcdbb1a1bed1f59d5d27cb3fac396c5855a270fadb761eeb52d0066'
+              def release():
+                  return json.loads(subprocess.check_output(['gh', 'api', f'repos/{repo}/releases/tags/v0.6.0']))
+              current = release()
+              assert current['id'] == 427428800 and not current['draft'] and not current['prerelease']
+              assert current['target_commitish'] == '1cceb715e94aee7462f03d0c7f3d775d91eb443b'
+              original = {a['name']: a for a in current['assets']}
+              python_name = 'FolderOrganizer-Windows-x64.zip'
+              python_hash = '08c836a43396229c400d7c5840dfc5ace4cd3babc8784992827c74c551233c64'
+              assert original[python_name]['id'] == 687209079
+              assert original[python_name]['digest'] == 'sha256:' + python_hash
+              assert original[python_name]['size'] == 101612763
+              assert set(original) <= {python_name, archive.name, 'SHA256SUMS.txt'}
+              if archive.name in original:
+                  assert original[archive.name]['digest'] in {'sha256:' + checksum, 'sha256:f5274748a1759b6815bea78299fe1430cd993cafa8f00fb2dbff4214f3925df1'}
+              sums = root / 'SHA256SUMS.txt'
+              sums.write_text(f'{python_hash}  {python_name}\n{checksum}  {archive.name}\n', encoding='utf-8')
+              subprocess.run(['gh', 'release', 'upload', 'v0.6.0', str(archive), str(sums), '--clobber', '--repo', repo], check=True)
+              body = pathlib.Path('docs/RELEASE_NOTES_0.6.0.md').read_text(encoding='utf-8')
+              body += f'\nRust 수정본 소스: [`{source[:12]}`](https://github.com/{repo}/commit/{source}) · [Windows 정식 빌드](https://github.com/{repo}/actions/runs/{run})\n'
+              notes = root / 'RELEASE_BODY.md'
+              notes.write_text(body, encoding='utf-8')
+              subprocess.run(['gh', 'release', 'edit', 'v0.6.0', '--notes-file', str(notes), '--repo', repo], check=True)
+              published = release()
+              published_assets = {a['name']: a for a in published['assets']}
+              assert set(published_assets) == {python_name, archive.name, sums.name}
+              for key in ('id', 'digest', 'size'):
+                  assert published_assets[python_name][key] == original[python_name][key]
+              assert published_assets[archive.name]['digest'] == 'sha256:' + checksum
+              assert published_assets[sums.name]['digest'] == 'sha256:' + hashlib.sha256(sums.read_bytes()).hexdigest()
+              assert source in published['body']
+              print(json.dumps({'published': published['html_url'], 'rust_sha256': checksum, 'python_asset_unchanged': True}))
+          else:
+              subprocess.run(['gh', 'release', 'create', tag, *map(str, assets), '--repo', repo, '--draft', '--prerelease', '--target', source, '--title', 'Verified Rust v0.6.0 transfer', '--notes', f'Unpublished transfer of the completed formal build {run}; no rebuild or test rerun.'], check=True)
+              print(json.dumps({'tag': tag, 'source_commit': source, 'formal_run': run, 'rust_sha256': checksum}))
           PY
