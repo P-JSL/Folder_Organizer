@@ -7,6 +7,7 @@ import subprocess
 import zipfile
 
 from archive_review_release import ROOT, digest
+from reuse_review_release import check_source_changes
 
 REPOSITORY = "P-JSL/Folder_Organizer"
 
@@ -21,7 +22,7 @@ def main() -> None:
     manifest = json.loads((source / "BUILD_INFO.json").read_text(encoding="utf-8"))
     commit = run("git", "rev-parse", "HEAD")
     if manifest["source_commit"] != commit:
-        raise ValueError("Release source and actual compiled artifacts differ")
+        check_source_changes(manifest["source_commit"], commit)
     version = manifest["version"]
     for name, package in manifest["packages"].items():
         if digest(source / name) != package["sha256"]:
@@ -34,7 +35,9 @@ def main() -> None:
         archive.write(source / "BUILD_INFO.json", "BUILD_INFO.json")
         archive.write(source / "PYTHON_PACKAGE_LAYOUT.json", "PYTHON_PACKAGE_LAYOUT.json")
     body = (ROOT / f"docs/RELEASE_NOTES_{version}.md").read_text(encoding="utf-8")
-    body += f"\n정식 빌드 소스: `{commit}`. 변경 경로의 새 Windows 검사·실제 패키지 실행·같은 입력 비교 자료는 `VALIDATION_RESULTS.zip`에 포함합니다.\n"
+    body += f"\n정식 빌드 소스: `{manifest['source_commit']}`. 배포 검사 소스: `{commit}`. 변경 경로의 새 Windows 검사·실제 패키지 실행·같은 입력 비교 자료는 `VALIDATION_RESULTS.zip`에 포함합니다.\n"
+    if manifest["source_commit"] != commit:
+        body += "\n빌드와 완료한 검사는 그대로 재사용했습니다. 최초 Python 패키지 확인의 마지막 콘솔 출력 인코딩 오류만 수정했으며, 해당 실행의 화면 파일은 보존되지 않아 첨부하지 않습니다. 재사용 근거는 첨부 기록에 포함합니다.\n"
     signing = manifest["authenticode"]
     body += f"\n실제 실행 파일 서명 모드: `{signing['mode']}`. 공인 신뢰 검증 완료: `{str(signing['public_trust_verified']).lower()}`. 자체 서명은 공인 게시자 인증을 의미하지 않습니다.\n"
     body += "\n| 실제 배포본 | ZIP 바이트 | 비압축 바이트 | 파일 수 |\n| --- | ---: | ---: | ---: |\n"
@@ -44,7 +47,7 @@ def main() -> None:
     notes.write_text(body, encoding="utf-8")
     tag = "v" + version
     run("gh", "release", "create", tag, *(str(source / name) for name in manifest["packages"]),
-        str(source / "SHA256SUMS.txt"), str(evidence), "--repo", REPOSITORY, "--draft", "--target", commit,
+        str(source / "SHA256SUMS.txt"), str(evidence), "--repo", REPOSITORY, "--draft", "--target", manifest["source_commit"],
         "--title", f"Folder Organizer {tag} · Python / Rust", "--notes-file", str(notes))
     run("gh", "release", "edit", tag, "--repo", REPOSITORY, "--draft=false", "--latest")
     print(json.dumps({"version": version, "source": commit, "status": "published", "release":

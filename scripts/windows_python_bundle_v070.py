@@ -207,7 +207,7 @@ def main() -> None:
                  "previously_passed_suites": "not rerun"}
         (ROOT / "dist/PYTHON_PACKAGE_CHECK.json").write_text(
             json.dumps(proof, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        print(json.dumps(proof, ensure_ascii=False))
+        print(json.dumps(proof, ensure_ascii=True))
 
 
 if __name__ == "__main__":
