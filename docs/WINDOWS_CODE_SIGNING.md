@@ -51,7 +51,7 @@ GitHub 저장소 → **Settings → Secrets and variables → Actions**:
 **Variables** (설정하지 않으면 기본값 사용):
 - `WINDOWS_SIGNING_TRUST_MODE=development`: 개발용 자체 서명 검증. 신뢰된 게시자로 표현하지 않습니다.
 - `WINDOWS_SIGNING_REQUIRED=true`: 서명 인증서 미설정 시에도 워크플로를 성공시키지 않고 실패로 처리. Secrets가 없는 동안은 설정하지 마세요.
-- `WINDOWS_SIGNING_TIMESTAMP_URL=http://timestamp.digicert.com`: RFC 3161 타임스탬프 URL. 설정하지 않아도 이 기본값 사용.
+- `WINDOWS_SIGNING_TIMESTAMP_URL=http://timestamp.digicert.com`: RFC 3161 타임스탬프 URL. 설정하지 않아도 이 기본값 사용. 내부 Windows 서명 테스트에서만 `development` 모드와 함께 `none`을 사용하여 네트워크 타임스탬프 없이 검사할 수 있습니다. 실제 배포에는 권장하지 않습니다.
 
 **자체 서명 인증서로 `WINDOWS_SIGNING_TRUST_MODE=public`을 설정하면 신뢰 검증 실패가 정상입니다.**
 
@@ -72,6 +72,8 @@ GitHub 저장소 → **Settings → Secrets and variables → Actions**:
 - `FolderOrganizerRustUpdater.exe`
 
 외부 공급자 DLL/PYD는 재서명하지 않습니다. 서명 후 EXE가 바뀌므로 **ZIP 및 SHA-256을 반드시 다시 생성**합니다. 설치 및 업데이트 디렉터리 구조는 바꾸지 않습니다.
+
+별도 `signing-smoke.yml` 워크플로는 GitHub Windows Runner에서 임시 자체 서명 인증서와 테스트 EXE를 생성하여 서명 경로를 검증합니다. 기존 Secrets나 공개 Release 파일을 사용하지 않습니다.
 
 Secrets 두 개가 **모두 없으면** 기존처럼 미서명 빌드를 생성하고 Actions Step Summary에 `NOT SIGNED`를 표시합니다. 한 개만 입력되면 설정 오류로 실패합니다. 서명 중 오류가 생겨도 **미서명 빌드로 대체하지 않습니다**.
 
