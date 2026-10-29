@@ -16,11 +16,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def relative(path: str, root: Path) -> str:
+    # Windows TEMP may use RUNNER~1 while the apps correctly return the long
+    # canonical username. Resolve both aliases before comparing relative names.
+    path = str(Path(path).resolve())
+    root_path = str(root.resolve())
     if path.startswith("\\\\?\\UNC\\"):
         path = "\\\\" + path[8:]
     elif path.startswith("\\\\?\\"):
         path = path[4:]
-    return os.path.relpath(path, root).replace("\\", "/").casefold()
+    if root_path.startswith("\\\\?\\UNC\\"):
+        root_path = "\\\\" + root_path[8:]
+    elif root_path.startswith("\\\\?\\"):
+        root_path = root_path[4:]
+    return os.path.relpath(path, root_path).replace("\\", "/").casefold()
 
 
 def contract() -> None:
@@ -80,8 +88,10 @@ def contract() -> None:
         assert {path.relative_to(folder).as_posix(): path.read_bytes()
                 for path in folder.rglob("*") if path.is_file()} == original
         # New native egui startup, not a repeat of the old Python GUI check.
-        subprocess.run([str(rust_app), "--gui-smoke"], check=True, timeout=60,
-                       env={**os.environ, "FOLDER_ORGANIZER_RUST_SMOKE": "1"})
+        smoke = subprocess.run([str(rust_app), "--gui-smoke"], timeout=60,
+                               capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               env={**os.environ, "FOLDER_ORGANIZER_RUST_SMOKE": "1"})
+        assert smoke.returncode == 0, f"Native Rust GUI startup failed ({smoke.returncode}): {smoke.stderr}\n{smoke.stdout}"
     print("New two-edition Windows contract passed; previous tests/build checks were not rerun.")
 
 
