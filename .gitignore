@@ -11,3 +11,8 @@ dist/
 test-results.xml
 rust-app/target/
 release-promotion/
+
+# Never commit exported code-signing private keys or encoded copies
+*.pfx
+*.p12
+*.pfx.base64.txt
