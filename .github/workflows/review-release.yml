@@ -7,12 +7,16 @@ on:
         description: 'Reuse an exact passed build/native gate after the known final console encoding failure'
         required: false
         default: ''
+      publish_completed_run_id:
+        description: 'Publish exact artifacts from the completed v0.7.0 gates without running them again'
+        required: false
+        default: ''
 permissions:
   contents: read
   actions: read
 jobs:
   native:
-    if: inputs.reuse_run_id == ''
+    if: inputs.reuse_run_id == '' && inputs.publish_completed_run_id == ''
     name: New Windows paths
     runs-on: windows-latest
     timeout-minutes: 20
@@ -31,7 +35,7 @@ jobs:
       - name: Check only new native Windows cases
         run: cargo +1.99.1 test --manifest-path rust-app/Cargo.toml --locked --target x86_64-pc-windows-msvc --test windows_review_v070
   build:
-    if: inputs.reuse_run_id == ''
+    if: inputs.reuse_run_id == '' && inputs.publish_completed_run_id == ''
     name: Build both editions
     runs-on: windows-latest
     timeout-minutes: 45
@@ -105,7 +109,7 @@ jobs:
           key: ${{ steps.rust_cache.outputs.cache-primary-key }}
   reuse:
     name: Preserve passed build and checks
-    if: inputs.reuse_run_id != ''
+    if: inputs.reuse_run_id != '' && inputs.publish_completed_run_id == ''
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -208,4 +212,35 @@ jobs:
           name: FolderOrganizer-v070-review
           path: review-results
       - name: Publish both passed editions
+        run: python scripts/publish_review_release.py
+  publish_completed:
+    name: Publish completed artifacts only
+    if: inputs.publish_completed_run_id != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PUBLISH_COMPLETED_RUN_ID: ${{ inputs.publish_completed_run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: FolderOrganizer-v070-build
+          path: release-build
+          run-id: ${{ inputs.publish_completed_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: FolderOrganizer-v070-review
+          path: review-results
+          run-id: ${{ inputs.publish_completed_run_id }}
+          github-token: ${{ github.token }}
+      - name: Upload and publish already verified artifacts
         run: python scripts/publish_review_release.py
