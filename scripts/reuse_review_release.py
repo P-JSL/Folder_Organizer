@@ -71,6 +71,7 @@ def unique_job(jobs: list[dict], name: str) -> dict:
 def narrow_traceback(log: str) -> str:
     # GitHub prefixes each line with an ISO timestamp. Discard only that prefix,
     # leaving the actual Python traceback as a small, inspectable source record.
+    log = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", log)
     lines = [re.sub(r"^\d{4}-\d{2}-\d{2}T\S+\s", "", line) for line in log.splitlines()]
     starts = [index for index, line in enumerate(lines) if line == "Traceback (most recent call last):"]
     if len(starts) != 1:
@@ -126,7 +127,7 @@ def main() -> None:
         selected = [step for step in steps if step.get("name") == name]
         if len(selected) != 1 or selected[0].get("conclusion") != "skipped":
             raise ValueError("An unrun new gate was unexpectedly executed in the prior run: " + name)
-    log = command("gh", "api", f"repos/{REPOSITORY}/actions/jobs/{review['id']}/logs")
+    log = command("gh", "api", "--allow-escape-sequences", f"repos/{REPOSITORY}/actions/jobs/{review['id']}/logs")
     trace = narrow_traceback(log)
     output = ROOT / "reuse-results"
     output.mkdir(exist_ok=False)
