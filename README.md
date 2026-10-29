@@ -2,6 +2,8 @@
 
 Windows에서 **내 컴퓨터의 폴더**를 선택해 파일을 살펴보고, 변경 내역을 미리 확인한 후 안전하게 정리하는 데스크톱 앱입니다. 파일은 외부 서버에 업로드하지 않습니다.
 
+**이용 권한: 권리자 P-JSL 본인과 권리자가 명시적으로 서면 허락한 사람만 사용할 수 있습니다.** 공개 저장소·다운로드 가능 여부는 사용·상업적 이용·재배포 허락이 아닙니다. [LICENSE](LICENSE) · [이용약관](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/TERMS_OF_USE.md) · [개인정보·로컬 데이터 안내](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/PRIVACY.md) · [이용허락 요청](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/PERMISSION_REQUEST.md)을 확인하세요. ZIP에는 앱 폴더의 `LICENSE`와 `licenses/FolderOrganizer/`에 관련 문서가 포함됩니다. 제3자 라이선스와 기존 적법한 권리는 유지합니다.
+
 **v0.6.1은 Python판과 Rust판을 각각 정식 Windows ZIP으로 제공합니다.** 기존에 통과한 Python 구현과 Rust 수정본의 기능을 유지하고, 두 판의 버전과 릴리즈 정보를 0.6.1로 맞췄습니다. 정식 1.0.0으로 표시하기 전에 충족할 기준은 [조사·완료 기준](docs/V1_READINESS.md), 두 판의 구성과 지원 경계는 [Python·Rust 안내](docs/EDITIONS_0.6.0.md), 통합한 메뉴는 [기능 정리 결정](docs/FEATURE_DECISIONS.md)에 정리했습니다. 사용자 지시에 따라 이번 릴리즈에서 기존 검사와 앱 실행 검사를 반복하지 않습니다.
 
 현재 안정판은 **v0.6.1**입니다. 중복 검사 결과를 재사용하는 즉시 정리, `delete_files` 보관, 복원 데이터 압축과 큰 목록의 조회·분석 개선을 포함합니다. 각 판의 자동 업데이트는 자기 판의 패키지만 확인합니다.
@@ -194,6 +196,6 @@ python -m PyInstaller --noconfirm --clean --onedir --windowed --name FolderOrgan
 
 GUI 없는 환경에서는 테스트 앞에 `QT_QPA_PLATFORM=offscreen`을 설정하세요. Windows 실행 파일은 Windows에서 빌드해야 합니다. `v*` 태그를 push하면 `.github/workflows/release.yml`이 Windows 테스트, 실행 파일 패키징, 실제 실행 파일의 분석·내보내기·업데이트 도우미 교체 검증, ZIP·SHA-256 체크섬을 포함한 GitHub Release 게시를 수행합니다. 이 워크플로가 성공하기 전에는 Windows 배포가 완료된 것으로 간주하지 않습니다.
 
-[상용 프로그램 비교와 설계 근거](docs/COMPETITIVE_ANALYSIS.md) · [변경 내역](CHANGELOG.md) · [제삼자 라이선스](docs/THIRD_PARTY.md)
+[상용 프로그램 비교와 설계 근거](docs/COMPETITIVE_ANALYSIS.md) · [변경 내역](CHANGELOG.md) · [앱 이용허락](LICENSE) · [이용약관](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/TERMS_OF_USE.md) · [개인정보 안내](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/PRIVACY.md) · [제삼자 라이선스](docs/THIRD_PARTY.md)
 
 v0.5.0의 변경 표와 확인 방법은 [버전 사용 확인 안내](docs/BUILD_REVIEW_0.5.0.md)에 있습니다. [용량 요약 화면](docs/overview.png), [중복 정리 완료 화면](docs/cleanup-result.png), [복원 데이터 최적화 미리보기](docs/compaction.png)도 실제 앱에서 캡처했습니다.

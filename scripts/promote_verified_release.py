@@ -1,6 +1,6 @@
 """Promote an already tested Windows artifact; never publish a release.
 
-Only the stable README/CHANGELOG may replace files inside the tested package.
+Only stable documentation and application terms may replace files inside the tested package.
 The application, updater, dependencies and every other payload byte stay intact.
 No dependency installation, test suite or native rebuild is needed.
 """
@@ -23,13 +23,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from folder_organizer import updater  # stdlib-only modules
 from folder_organizer import updater_helper as helper
+from package_legal import LEGAL_FILES, bundled_document
 
 REPOSITORY = "P-JSL/Folder_Organizer"
 APPROVED_DOCUMENTS = {
     "README.md", "CHANGELOG.md", "docs/RELEASE_NOTES.md",
     "docs/RELEASE_NOTES_0.5.0.md", "docs/GUI_GUIDE.md",
     "docs/BUILD_REVIEW_0.5.0.md",
-}
+} | set(LEGAL_FILES.values())
 REQUIRED_STEPS = {
     "Run python -m pytest -q --junitxml=test-results.xml",
     "Build portable desktop app", "Build independent update helper",
@@ -169,9 +170,28 @@ def promote(config: dict, evidence: dict) -> None:
             f"{helper.APP_DIRECTORY}/{name}": command("git", "show", f"{config['release_sha']}:{name}")
             for name in ("README.md", "CHANGELOG.md")
         }
+        # Preserve historical releases, including any old standalone license.
+        # If a pinned release includes the new terms, all four travel together.
+        legal_sources = set(LEGAL_FILES.values())
+        pinned_legal_sources = set(command(
+            "git", "ls-tree", "-r", "--name-only", config["release_sha"], "--",
+            *sorted(legal_sources),
+        ).decode().splitlines())
+        require(not (pinned_legal_sources - {"LICENSE"}) or pinned_legal_sources == legal_sources,
+                "Pinned release contains incomplete application terms")
+        if pinned_legal_sources:
+            replacements.update({
+                f"{helper.APP_DIRECTORY}/{destination}": bundled_document(destination, command(
+                    "git", "show", f"{config['release_sha']}:{source}"
+                ))
+                for destination, source in LEGAL_FILES.items()
+                if source in pinned_legal_sources
+            })
         final = output / updater.WINDOWS_ASSET
         with zipfile.ZipFile(original) as source, zipfile.ZipFile(final, "x") as target:
-            require(replacements.keys() <= set(source.namelist()), "Candidate lacks bundled stable documentation")
+            require({f"{helper.APP_DIRECTORY}/README.md", f"{helper.APP_DIRECTORY}/CHANGELOG.md"}
+                    <= set(source.namelist()), "Candidate lacks bundled stable documentation")
+            added_documents = set(replacements) - set(source.namelist())
             for item in source.infolist():
                 info = copy.copy(item)
                 if item.filename in replacements:
@@ -181,8 +201,10 @@ def promote(config: dict, evidence: dict) -> None:
                 else:
                     with source.open(item) as reader, target.open(info, "w", force_zip64=True) as writer:
                         shutil.copyfileobj(reader, writer, 1024 * 1024)
+            for name in sorted(added_documents):
+                target.writestr(name, replacements[name], compress_type=zipfile.ZIP_DEFLATED)
         final_files = validate_package(final, scratch / "final", version)
-        document_names = {"README.md", "CHANGELOG.md"}
+        document_names = {name.removeprefix(helper.APP_DIRECTORY + "/") for name in replacements}
         require({k: v for k, v in original_files.items() if k not in document_names} == {
             k: v for k, v in final_files.items() if k not in document_names
         }, "A non-documentation payload byte changed")
@@ -192,7 +214,8 @@ def promote(config: dict, evidence: dict) -> None:
         final_digest = helper.file_hash(final)
         (output / updater.CHECKSUM_ASSET).write_text(f"{final_digest}  {updater.WINDOWS_ASSET}\n", encoding="utf-8")
         proof = {**config, "artifact_digest": artifact["digest"], "original_zip_sha256": expected,
-                 "release_zip_sha256": final_digest, "unchanged_payload_files": len(final_files) - 2,
+                 "release_zip_sha256": final_digest,
+                 "unchanged_payload_files": len(final_files) - len(document_names),
                  "changed_documents": evidence["changed_documents"], "reused_passed_checks": sorted(REQUIRED_STEPS)}
         (output / "VERIFICATION.json").write_text(json.dumps(proof, indent=2) + "\n", encoding="utf-8")
         fresh = provenance(config)

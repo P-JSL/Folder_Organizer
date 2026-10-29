@@ -7,6 +7,8 @@ from pathlib import Path, PurePosixPath
 import shutil
 import zipfile
 
+from package_legal import include_legal_documents
+
 ROOT = Path(__file__).resolve().parents[1]
 RUST_DIRECTORY = "FolderOrganizerRust"
 RUST_PROGRAMS = (
@@ -27,6 +29,10 @@ def main() -> None:
             relative = PurePosixPath(*path.parts[1:])
             if relative.as_posix() != "THIRD_PARTY.md" and not relative.parts[:1] == ("licenses",):
                 continue
+            # Application terms come from this release, rather than an older
+            # package; dependency notices are reused without changing them.
+            if relative.parts[:2] == ("licenses", "FolderOrganizer"):
+                continue
             if entry.is_dir():
                 continue
             if relative.is_absolute() or ".." in relative.parts or any(
@@ -43,6 +49,7 @@ def main() -> None:
     shutil.copyfile(ROOT / "rust-app/version.json", destination / "version.json")
     for name in ("README.md", "CHANGELOG.md"):
         shutil.copyfile(ROOT / name, destination / name)
+    include_legal_documents(destination)
 
     checksums = []
     for directory, archive_name in (

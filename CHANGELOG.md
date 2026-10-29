@@ -2,6 +2,7 @@
 
 ## 0.6.1 — 2026-10-29 · Python / Rust
 
+- Add a proprietary authorized-use-only application license, detailed terms, local-data/privacy notice and permission-request guidance. Preserve third-party licenses and existing lawful grants; include legal notices in both packages without changing the already released executables.
 - Release both Windows editions as 0.6.1 so existing 0.6.0 installations can recognize a newer update. Preserve the previously passed Python implementation and Rust identity, metadata-preservation and classification fixes.
 - Change version and release metadata only. Skip previously passed tests and application execution checks as requested; build the version-stamped release packages without new feature changes.
 

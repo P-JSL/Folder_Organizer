@@ -1,5 +1,7 @@
 **Folder Organizer v0.6.1 — Python판·Rust판 Windows 정식 릴리즈**
 
+**이용허락 안내 · 2026-10-29:** 권리자 P-JSL 본인과 권리자가 명시적으로 서면 허락한 사람만 사용할 수 있습니다. 공개·다운로드 가능 여부만으로 사용·상업적 이용·재배포를 허락하지 않습니다. [LICENSE](https://github.com/P-JSL/Folder_Organizer/blob/main/LICENSE) · [이용약관](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/TERMS_OF_USE.md) · [개인정보 안내](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/PRIVACY.md) · [이용허락 요청](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/PERMISSION_REQUEST.md)을 확인하세요. 두 ZIP에 라이선스·약관 문서를 추가하며 실행 파일과 버전은 유지합니다. 제3자 라이선스와 기존 적법한 허락은 소급 변경하지 않습니다. 이 조건은 다운로드·실행을 기술적으로 차단하는 인증 장치가 아닙니다.
+
 이미 통과한 Python 구현과 Rust 수정본의 기능을 유지하고, 두 판의 앱 내부 버전·배포 표식을 **0.6.1**로 맞췄습니다. 기존 0.6.0 앱의 업데이트 기능에서 새 버전으로 인식할 수 있습니다.
 
 | 다운로드 | 실행 파일 |

@@ -2,6 +2,8 @@
 
 Folder Organizer uses these libraries. Their licenses and source projects remain applicable to redistributed packages:
 
+The application's own materials are subject to the restricted [Folder Organizer license](https://github.com/P-JSL/Folder_Organizer/blob/main/LICENSE): only P-JSL and explicitly authorized users may use those materials within their grant. This restriction does **not** replace or restrict the licenses of third-party components. The applicable LGPL rights to modify, replace and relink libraries, and reverse-engineer the combined work to debug such modifications, are preserved. No additional application permission is required to exercise rights independently granted for those components. In portable packages, the application license is at `LICENSE` and its terms, privacy notice and permission guidance are under `licenses/FolderOrganizer/`.
+
 | Component | License / source |
 | --- | --- |
 | PySide6 / Qt 6 / Shiboken6 | LGPLv3/GPLv3 or commercial, https://doc.qt.io/qtforpython-6/licenses.html ; https://code.qt.io/cgit/pyside/pyside-setup.git/ ; https://code.qt.io/cgit/qt/ |

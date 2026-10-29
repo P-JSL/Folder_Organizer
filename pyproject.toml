@@ -7,6 +7,9 @@ name = "folder-organizer-desktop"
 version = "0.6.1"
 description = "A local Windows folder organizer with verified matching, recoverable storage and undo"
 readme = "README.md"
+license = "LicenseRef-PJSL-Authorized-Use-Only"
+license-files = ["LICENSE", "docs/TERMS_OF_USE.md", "docs/PRIVACY.md", "docs/PERMISSION_REQUEST.md"]
+classifiers = ["Private :: Do Not Upload"]
 requires-python = ">=3.11"
 dependencies = [
     "PySide6-Essentials==6.10.3",

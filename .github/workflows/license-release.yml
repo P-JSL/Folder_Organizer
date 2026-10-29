@@ -1,0 +1,35 @@
+name: Add application terms to existing releases
+run-name: Apply license to Python and Rust v0.6.1 · documentation only
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  documentation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download existing 0.6.1 packages
+        run: gh release download v0.6.1 --repo P-JSL/Folder_Organizer --pattern FolderOrganizer-Windows-x64.zip --pattern FolderOrganizer-Rust-Windows-x64.zip --pattern SHA256SUMS.txt --dir legal-source
+      - name: Include license and terms without rebuilding programs
+        run: python scripts/repackage_legal_release.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FolderOrganizer-0.6.1-legal-documents
+          retention-days: 14
+          compression-level: 0
+          path: |
+            legal-dist/FolderOrganizer-Windows-x64.zip
+            legal-dist/FolderOrganizer-Rust-Windows-x64.zip
+            legal-dist/SHA256SUMS.txt
+            legal-dist/LEGAL_REPACKAGE.json
+      - name: Apply terms to the existing 0.6.1 release
+        run: python scripts/publish_legal_release.py

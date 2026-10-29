@@ -44,6 +44,8 @@ jobs:
         run: |
           Copy-Item README.md,CHANGELOG.md,docs/THIRD_PARTY.md dist/FolderOrganizer/
           Copy-Item -Recurse docs/licenses dist/FolderOrganizer/licenses
+          python scripts/package_legal.py dist/FolderOrganizer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Compress-Archive -Path dist/FolderOrganizer -DestinationPath FolderOrganizer-Windows-x64.zip
           $hash = (Get-FileHash FolderOrganizer-Windows-x64.zip -Algorithm SHA256).Hash.ToLower()
           "$hash  FolderOrganizer-Windows-x64.zip" | Set-Content SHA256SUMS.txt

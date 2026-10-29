@@ -41,6 +41,8 @@ jobs:
           Copy-Item dist/FolderOrganizerUpdater.exe dist/FolderOrganizer/
           Copy-Item README.md,CHANGELOG.md,docs/THIRD_PARTY.md dist/FolderOrganizer/
           Copy-Item -Recurse docs/licenses dist/FolderOrganizer/licenses
+          python scripts/package_legal.py dist/FolderOrganizer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build new native Rust programs
         run: cargo +1.99.1 build --manifest-path rust-app/Cargo.toml --locked --target x86_64-pc-windows-msvc --release --features gui --bins
       - name: Package native Rust edition and dependency notices

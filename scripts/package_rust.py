@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import tomllib
 
+from package_legal import include_legal_documents
+
 ROOT = Path(__file__).resolve().parents[1]
 RUST = ROOT / "rust-app"
 PROGRAMS = ("FolderOrganizerRust.exe", "FolderOrganizerRustCLI.exe", "FolderOrganizerRustUpdater.exe")
@@ -107,6 +109,7 @@ def package(binaries: Path, destination: Path) -> None:
             with path.open("rb") as original, target.open("xb") as output:
                 shutil.copyfileobj(original, output)
     (destination / "THIRD_PARTY.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    include_legal_documents(destination)
     print(json.dumps({"edition": "Rust", "version": version, "dependencies": len(dependencies),
                       "license_files": count, "license_bytes": total}))
 
