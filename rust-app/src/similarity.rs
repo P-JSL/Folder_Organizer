@@ -18,6 +18,7 @@ const MAX_TEXT_BYTES: usize = 256 * 1024;
 const MAX_WORDS: usize = 4096;
 const TEXT_CACHE_ENTRIES: usize = 256;
 const IMAGE_CACHE_ENTRIES: usize = 4096;
+const NAME_CACHE_ENTRIES: usize = 4096;
 const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_IMAGE_PIXELS: u64 = 40_000_000;
 const TEXT_SKETCH_KEYS: usize = 8;
@@ -74,6 +75,7 @@ pub struct SimilarAnalysis {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CandidateIndexMetrics {
     pub enabled: bool,
     pub files_visited: usize,
@@ -87,6 +89,18 @@ pub struct CandidateIndexMetrics {
     pub index_key_limit: usize,
     pub posting_limit: usize,
     pub candidates_per_file: usize,
+    pub name_feature_loads: usize,
+    pub name_feature_cache_hits: usize,
+    pub name_feature_cache_evictions: usize,
+    pub name_feature_cache_peak: usize,
+    pub text_feature_loads: usize,
+    pub text_feature_cache_hits: usize,
+    pub text_feature_cache_evictions: usize,
+    pub text_feature_cache_peak: usize,
+    pub image_feature_loads: usize,
+    pub image_feature_cache_hits: usize,
+    pub image_feature_cache_evictions: usize,
+    pub image_feature_cache_peak: usize,
 }
 
 struct TextSignature {
@@ -98,6 +112,10 @@ struct FeatureCache<T> {
     values: HashMap<usize, Option<T>>,
     order: VecDeque<usize>,
     limit: usize,
+    loads: usize,
+    hits: usize,
+    evictions: usize,
+    peak: usize,
 }
 
 impl<T> FeatureCache<T> {
@@ -106,6 +124,10 @@ impl<T> FeatureCache<T> {
             values: HashMap::new(),
             order: VecDeque::new(),
             limit,
+            loads: 0,
+            hits: 0,
+            evictions: 0,
+            peak: 0,
         }
     }
 
@@ -117,6 +139,7 @@ impl<T> FeatureCache<T> {
         report: &mut SimilarAnalysis,
     ) {
         if self.values.contains_key(&id) {
+            self.hits += 1;
             return;
         }
         while self.values.len() >= self.limit {
@@ -127,8 +150,10 @@ impl<T> FeatureCache<T> {
                 self.order.push_back(old);
             } else {
                 self.values.remove(&old);
+                self.evictions += 1;
             }
         }
+        self.loads += 1;
         let value = match load() {
             Ok(value) => value,
             Err(error) => {
@@ -138,6 +163,7 @@ impl<T> FeatureCache<T> {
         };
         self.values.insert(id, value);
         self.order.push_back(id);
+        self.peak = self.peak.max(self.values.len());
     }
 }
 
@@ -149,7 +175,7 @@ fn feature_warning(report: &mut SimilarAnalysis, error: String) {
     }
 }
 
-fn name_keys(entry: &FileEntry) -> Vec<String> {
+fn name_keys(entry: &FileEntry) -> Vec<u64> {
     let stem = entry
         .path
         .file_stem()
@@ -162,11 +188,15 @@ fn name_keys(entry: &FileEntry) -> Vec<String> {
         .take(256)
         .collect();
     if chars.len() < 2 {
-        return vec![format!("n:{}", chars.into_iter().collect::<String>())];
+        // Empty and single-character names need their own exact keys. Pair
+        // keys use a disjoint tag, so no Unicode scalar/pair can collide.
+        return vec![chars.first().map_or(0, |ch| u64::from(u32::from(*ch)) + 1)];
     }
     let mut keys = HashSet::new();
     for pair in chars.windows(2) {
-        keys.insert(format!("n:{}{}", pair[0], pair[1]));
+        keys.insert(
+            (1_u64 << 63) | (u64::from(u32::from(pair[0])) << 21) | u64::from(u32::from(pair[1])),
+        );
         if keys.len() >= MAX_KEYS_PER_FILE {
             break;
         }
@@ -176,7 +206,7 @@ fn name_keys(entry: &FileEntry) -> Vec<String> {
     keys
 }
 
-fn dice(left: &[String], right: &[String]) -> f32 {
+fn dice<T: Ord>(left: &[T], right: &[T]) -> f32 {
     if left.is_empty() || right.is_empty() {
         return 0.0;
     }
@@ -203,13 +233,16 @@ fn pair_rank(a: usize, b: usize) -> u64 {
     value ^ (value >> 31)
 }
 
-fn text_words(entry: &FileEntry) -> AppResult<Option<TextSignature>> {
-    if ![
+fn is_text(entry: &FileEntry) -> bool {
+    [
         ".txt", ".md", ".csv", ".tsv", ".log", ".json", ".toml", ".yaml", ".yml", ".xml", ".ini",
         ".cfg",
     ]
     .contains(&entry.extension.as_str())
-    {
+}
+
+fn text_words(entry: &FileEntry) -> AppResult<Option<TextSignature>> {
+    if !is_text(entry) {
         return Ok(None);
     }
     let mut file = safe_open(&entry.path)?;
@@ -459,6 +492,7 @@ fn indexed_pairs(
     progress: Option<&dyn Fn(Progress)>,
     text_cache: &mut FeatureCache<TextSignature>,
     image_cache: &mut FeatureCache<ImageSignature>,
+    name_cache: &mut FeatureCache<Vec<u64>>,
     report: &mut SimilarAnalysis,
 ) -> Vec<(usize, usize)> {
     let mut index: HashMap<String, VecDeque<usize>> = HashMap::new();
@@ -470,7 +504,7 @@ fn indexed_pairs(
             break;
         }
         let mut keys = Vec::new();
-        if options.compare_text {
+        if options.compare_text && is_text(entry) {
             text_cache.ensure(current, None, || text_words(entry), report);
             if let Some(Some(signature)) = text_cache.values.get(&current) {
                 keys.extend(text_keys(signature));
@@ -488,7 +522,12 @@ fn indexed_pairs(
         // Enabled content always gets index slots. Disabled name comparison
         // cannot fill the candidate budget with unrelated name-only neighbors.
         if options.compare_names {
-            keys.extend(name_keys(entry));
+            name_cache.ensure(current, None, || Ok(Some(name_keys(entry))), report);
+            if let Some(Some(signature)) = name_cache.values.get(&current) {
+                // The index owns its bounded string keys; scoring uses the
+                // compact keys without allocating strings for every pair.
+                keys.extend(signature.iter().map(|key| format!("n:{key:016x}")));
+            }
         }
         keys.truncate(MAX_KEYS_PER_FILE);
         let mut votes: HashMap<usize, (u32, u32)> = HashMap::new();
@@ -663,6 +702,7 @@ pub fn find_similar_excluding(
     );
     let mut text_cache = FeatureCache::new(TEXT_CACHE_ENTRIES);
     let mut image_cache = FeatureCache::new(IMAGE_CACHE_ENTRIES);
+    let mut name_cache = FeatureCache::new(NAME_CACHE_ENTRIES);
     let mut pairs = Vec::new();
     if !report.cancelled {
         if exhaustive {
@@ -684,6 +724,7 @@ pub fn find_similar_excluding(
                 progress,
                 &mut text_cache,
                 &mut image_cache,
+                &mut name_cache,
                 &mut report,
             );
         }
@@ -719,13 +760,21 @@ pub fn find_similar_excluding(
             }
         };
         let name_score = if options.compare_names {
-            dice(&name_keys(a), &name_keys(b))
+            // These keys depend only on the immutable inventory path, not
+            // cached file content. Current file snapshots are still checked
+            // before and after every scored pair, including cache hits.
+            name_cache.ensure(left, Some(right), || Ok(Some(name_keys(a))), &mut report);
+            name_cache.ensure(right, Some(left), || Ok(Some(name_keys(b))), &mut report);
+            match (name_cache.values.get(&left), name_cache.values.get(&right)) {
+                (Some(Some(left_keys)), Some(Some(right_keys))) => dice(left_keys, right_keys),
+                _ => 0.0,
+            }
         } else {
             0.0
         };
         let mut text_score = None;
         let mut image_similarity = None;
-        if options.compare_text {
+        if options.compare_text && is_text(a) && is_text(b) {
             text_cache.ensure(left, Some(right), || text_words(a), &mut report);
             text_cache.ensure(right, Some(left), || text_words(b), &mut report);
             if let (Some(Some(left_feature)), Some(Some(right_feature))) =
@@ -802,5 +851,17 @@ pub fn find_similar_excluding(
             }
         }
     }
+    report.candidate_index.name_feature_loads = name_cache.loads;
+    report.candidate_index.name_feature_cache_hits = name_cache.hits;
+    report.candidate_index.name_feature_cache_evictions = name_cache.evictions;
+    report.candidate_index.name_feature_cache_peak = name_cache.peak;
+    report.candidate_index.text_feature_loads = text_cache.loads;
+    report.candidate_index.text_feature_cache_hits = text_cache.hits;
+    report.candidate_index.text_feature_cache_evictions = text_cache.evictions;
+    report.candidate_index.text_feature_cache_peak = text_cache.peak;
+    report.candidate_index.image_feature_loads = image_cache.loads;
+    report.candidate_index.image_feature_cache_hits = image_cache.hits;
+    report.candidate_index.image_feature_cache_evictions = image_cache.evictions;
+    report.candidate_index.image_feature_cache_peak = image_cache.peak;
     Ok(report)
 }

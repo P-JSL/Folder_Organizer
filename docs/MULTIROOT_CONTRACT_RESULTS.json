@@ -1,0 +1,61 @@
+{
+  "scope": "new multi-root cross-engine CLI semantics only, native Linux dev binary; no speed claim",
+  "commands": {
+    "Python": [
+      "/workspace/.venvs/folder-organizer/bin/python",
+      "-m",
+      "folder_organizer",
+      "--cli"
+    ],
+    "Rust": [
+      "/workspace/Folder_Organizer/rust-app/target/debug/FolderOrganizerRustCLI"
+    ]
+  },
+  "source_bytes_unchanged": true,
+  "results": [
+    {
+      "scenario": "duplicates",
+      "engines": [
+        "Python",
+        "Rust"
+      ],
+      "semantic_contract_matches": true,
+      "inventory_files": 6,
+      "groups": 1,
+      "complete": true
+    },
+    {
+      "scenario": "inventory",
+      "engines": [
+        "Python",
+        "Rust"
+      ],
+      "semantic_contract_matches": true,
+      "inventory_files": 6,
+      "groups": 0,
+      "complete": true
+    },
+    {
+      "scenario": "partial",
+      "engines": [
+        "Python",
+        "Rust"
+      ],
+      "semantic_contract_matches": true,
+      "inventory_files": 6,
+      "groups": 1,
+      "complete": false
+    },
+    {
+      "scenario": "filtered",
+      "engines": [
+        "Python",
+        "Rust"
+      ],
+      "semantic_contract_matches": true,
+      "inventory_files": 5,
+      "groups": 1,
+      "complete": true
+    }
+  ]
+}

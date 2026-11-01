@@ -3,7 +3,7 @@ use crate::core::{self, AppResult, DuplicateGroup, Progress, ScanOptions, ScanRe
 use crate::operations::{
     self, HistoryRecord, LogRecord, OperationPlan, OperationReceipt, TransferKind,
 };
-use crate::{merging, recovery, reporting, rules, similarity, updater};
+use crate::{merging, multiroot, recovery, reporting, rules, similarity, updater};
 use chrono::{DateTime, Local};
 use eframe::egui::{self, Color32, RichText};
 use egui_extras::{Column, TableBuilder};
@@ -34,6 +34,7 @@ const HELP: &[(&str, &str)] = &[
     ("복원 데이터 최적화", "완료 작업을 선택해 별도로 요청하면 실제 보관 데이터를 1 MiB 조각 중복 제거·무손실 압축으로 줄입니다. 검증과 기록을 마친 뒤 사본을 줄이며, 효과가 없으면 원본 저장을 유지합니다. 메타데이터만으로 잃어버린 원문을 만들 수 없습니다."),
     ("손상 검사와 새 복구본", "지원 ZIP·Office ZIP·이미지·PDF에서 읽을 수 있는 내용만 새 파일로 보존합니다. 원본을 고치거나 디스크 삭제 영역을 되살리지 않습니다. 암호화·해석 한도·부분 복구의 경고를 확인하세요."),
     ("검사 범위와 속도", "목록 탐색과 요약은 항목을 한 번씩 방문합니다. 정렬과 실제 바이트 검증 비용은 별도입니다. 큰 유사 비교는 제한된 후보를 사용하므로 일부 쌍을 놓칠 수 있습니다. 취소·권한 오류·부분 검사 경고를 확인하세요."),
+    ("여러 폴더 통합 분석", "파일 메뉴에서 여러 폴더를 등록한 뒤 전체 또는 체크한 폴더를 함께 분석합니다. 서로 다른 폴더의 완전 중복도 실제 바이트로 확인합니다. 이 창은 읽기 전용이며 삭제·이동 버튼과 연결되지 않습니다. 중첩 경로·부분 실패·취소 안내를 확인하세요. 자동 감시는 실행하지 않습니다."),
     ("자동 업데이트", "Rust 배포판은 Rust ZIP·체크섬·버전 표식을 확인합니다. Python 배포판과 섞어 설치하지 않습니다. 업데이트는 파일 작업을 마친 뒤 앱이 종료된 후 별도 도우미가 적용합니다. 소스 실행에서는 지원하지 않습니다."),
 ];
 
@@ -42,6 +43,7 @@ const HELP: &[(&str, &str)] = &[
 struct Settings {
     dark: bool,
     recent: Vec<PathBuf>,
+    multi_roots: Vec<PathBuf>,
     protected: Vec<PathBuf>,
     preferred: Option<PathBuf>,
     retention: usize,
@@ -55,6 +57,7 @@ impl Default for Settings {
         Self {
             dark: true,
             recent: vec![],
+            multi_roots: vec![],
             protected: vec![],
             preferred: None,
             retention: 0,
@@ -215,6 +218,7 @@ struct Comparison {
 }
 enum ResultData {
     Scan(ScanResult, ScanOptions),
+    Multi(multiroot::MultiAnalysis),
     Duplicates(core::DuplicateAnalysis),
     Similar(similarity::SimilarAnalysis),
     Plan(OperationPlan),
@@ -235,12 +239,24 @@ enum ResultData {
 }
 enum WorkerEvent {
     Progress(Progress),
+    MultiProgress(multiroot::MultiProgress),
     Finished(AppResult<ResultData>),
 }
 struct Busy {
     name: String,
     started: Instant,
     cancel: Arc<AtomicBool>,
+}
+
+struct MultiFolderInput {
+    path: PathBuf,
+    selected: bool,
+}
+
+#[derive(Clone, Copy)]
+enum MultiDuplicateRow {
+    Header(usize),
+    File(usize, usize),
 }
 
 pub struct OrganizerApp {
@@ -302,6 +318,16 @@ pub struct OrganizerApp {
     next_update_check: Instant,
     quit_requested: bool,
     smoke_frames: Option<u32>,
+    multi_open: bool,
+    multi_folders: Vec<MultiFolderInput>,
+    multi_result: Option<Arc<multiroot::MultiAnalysis>>,
+    multi_progress: BTreeMap<String, multiroot::MultiProgress>,
+    multi_root_labels: BTreeMap<String, String>,
+    multi_rows: Vec<MultiDuplicateRow>,
+    multi_workers: usize,
+    multi_show_files: bool,
+    multi_warnings: Vec<String>,
+    multi_warning_total: usize,
 }
 
 impl OrganizerApp {
@@ -310,6 +336,15 @@ impl OrganizerApp {
         let settings = load_settings();
         apply_theme(&context.egui_ctx, settings.dark);
         let scan_excludes = settings.scan.exclude_patterns.join("\n");
+        let multi_folders = settings
+            .multi_roots
+            .iter()
+            .cloned()
+            .map(|path| MultiFolderInput {
+                path,
+                selected: true,
+            })
+            .collect();
         Self {
             settings,
             root: None,
@@ -371,6 +406,16 @@ impl OrganizerApp {
             smoke_frames: (std::env::args().any(|arg| arg == "--gui-smoke")
                 || std::env::var("FOLDER_ORGANIZER_RUST_SMOKE").is_ok_and(|value| value == "1"))
             .then_some(0),
+            multi_open: false,
+            multi_folders,
+            multi_result: None,
+            multi_progress: BTreeMap::new(),
+            multi_root_labels: BTreeMap::new(),
+            multi_rows: vec![],
+            multi_workers: 2,
+            multi_show_files: false,
+            multi_warnings: vec![],
+            multi_warning_total: 0,
         }
     }
     fn note(&mut self, message: impl Into<String>) {
@@ -401,6 +446,20 @@ impl OrganizerApp {
     where
         F: FnOnce(&AtomicBool, &dyn Fn(Progress)) -> AppResult<ResultData> + Send + 'static,
     {
+        self.start_worker(context, name, move |cancel, sender, context| {
+            let callback = |progress| {
+                let _ = sender.send(WorkerEvent::Progress(progress));
+                context.request_repaint();
+            };
+            operation(cancel, &callback)
+        });
+    }
+    fn start_worker<F>(&mut self, context: &egui::Context, name: &str, operation: F)
+    where
+        F: FnOnce(&AtomicBool, &mpsc::Sender<WorkerEvent>, &egui::Context) -> AppResult<ResultData>
+            + Send
+            + 'static,
+    {
         if self.busy.is_some() {
             return;
         }
@@ -417,11 +476,7 @@ impl OrganizerApp {
         self.note(format!("시작: {name}"));
         let context = context.clone();
         std::thread::spawn(move || {
-            let callback = |progress| {
-                let _ = sender.send(WorkerEvent::Progress(progress));
-                context.request_repaint();
-            };
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(&cancel, &callback)))
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(&cancel, &sender, &context)))
                 .unwrap_or_else(|_| Err("작업이 예기치 않게 중단되었습니다. 기록과 원본을 유지하고 실행 로그를 확인하세요.".into()));
             let _ = sender.send(WorkerEvent::Finished(result));
             context.request_repaint();
@@ -436,6 +491,20 @@ impl OrganizerApp {
         for event in events {
             match event {
                 WorkerEvent::Progress(progress) => self.progress = Some(progress),
+                WorkerEvent::MultiProgress(progress) => {
+                    if progress.phase == "scan_start" {
+                        self.multi_root_labels
+                            .insert(progress.root_id.clone(), progress.message.clone());
+                    }
+                    self.progress = Some(Progress {
+                        phase: progress.phase.clone(),
+                        completed: progress.completed,
+                        total: progress.total,
+                        message: progress.message.clone(),
+                    });
+                    self.multi_progress
+                        .insert(progress.root_id.clone(), progress);
+                }
                 WorkerEvent::Finished(result) => {
                     let name = self.busy.take().map(|job| job.name).unwrap_or_default();
                     self.receiver = None;
@@ -458,6 +527,49 @@ impl OrganizerApp {
     }
     fn finish(&mut self, data: ResultData) {
         match data {
+            ResultData::Multi(report) => {
+                self.status =
+                    format!(
+                    "여러 폴더 통합 분석 · 폴더 {}개 · 파일 {}개 · 완전 중복 {}그룹{} · 읽기 전용",
+                    report.roots.len(), report.files.len(), report.duplicates.groups.len(),
+                    if report.complete { " · 완료" } else { " · 일부 미완료" }
+                );
+                self.multi_rows.clear();
+                for (group_index, group) in report.duplicates.groups.iter().enumerate() {
+                    self.multi_rows.push(MultiDuplicateRow::Header(group_index));
+                    self.multi_rows.extend(
+                        (0..group.paths.len())
+                            .map(|file_index| MultiDuplicateRow::File(group_index, file_index)),
+                    );
+                }
+                self.multi_warning_total = report.notes.len()
+                    + report.duplicates.warnings.len()
+                    + report
+                        .roots
+                        .iter()
+                        .map(|root| root.warnings.len() + usize::from(root.error.is_some()))
+                        .sum::<usize>();
+                self.multi_warnings =
+                    report
+                        .notes
+                        .iter()
+                        .cloned()
+                        .chain(report.roots.iter().flat_map(|root| {
+                            root.error
+                                .iter()
+                                .chain(root.warnings.iter())
+                                .map(move |message| {
+                                    format!("{}: {message}", root.requested_path.display())
+                                })
+                        }))
+                        .chain(report.duplicates.warnings.iter().map(|warning| {
+                            format!("{}: {}", warning.path.display(), warning.message)
+                        }))
+                        .take(1000)
+                        .collect();
+                self.multi_result = Some(Arc::new(report));
+                self.multi_open = true;
+            }
             ResultData::Scan(scan, options) => {
                 self.scan_options = options;
                 self.root = Some(scan.root.clone());
@@ -747,6 +859,53 @@ impl OrganizerApp {
         self.start(context, "폴더 분석", move |cancel, progress| {
             core::scan(&root, &options, cancel, Some(progress))
                 .map(|scan| ResultData::Scan(scan, options))
+        });
+    }
+    fn start_multiroot(&mut self, context: &egui::Context, roots: Vec<PathBuf>) {
+        if self.busy.is_some() || roots.is_empty() {
+            return;
+        }
+        self.multi_result = None;
+        self.multi_rows.clear();
+        self.multi_warnings.clear();
+        self.multi_warning_total = 0;
+        self.multi_progress.clear();
+        self.multi_root_labels.clear();
+        let options = self.settings.scan.clone();
+        let workers = self.multi_workers;
+        self.start_worker(
+            context,
+            "여러 폴더 통합 분석",
+            move |cancel, sender, context| {
+                let callback = |progress| {
+                    let _ = sender.send(WorkerEvent::MultiProgress(progress));
+                    context.request_repaint();
+                };
+                multiroot::analyze(&roots, &options, true, workers, cancel, Some(&callback))
+                    .map(ResultData::Multi)
+            },
+        );
+    }
+    fn export_multiroot(&mut self, context: &egui::Context) {
+        if self.busy.is_some() {
+            return;
+        }
+        let Some(report) = self.multi_result.clone() else {
+            return;
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("통합 분석 JSON 저장 · 검사 폴더 밖의 새 파일")
+            .set_file_name("FolderOrganizer-여러폴더-분석.json")
+            .save_file()
+        else {
+            return;
+        };
+        self.start(context, "여러 폴더 보고서 저장", move |_, _| {
+            reporting::export_multiroot_json(report.as_ref(), &path)?;
+            Ok(ResultData::Message(format!(
+                "읽기 전용 통합 보고서 저장: {}",
+                path.display()
+            )))
         });
     }
     fn checked_paths(&self) -> Vec<PathBuf> {
@@ -1179,6 +1338,10 @@ impl OrganizerApp {
                     {
                         ui.close_menu();
                         self.pick_folder(context);
+                    }
+                    if ui.button("여러 폴더 통합 분석…").clicked() {
+                        self.multi_open = true;
+                        ui.close_menu();
                     }
                     ui.menu_button("최근 폴더", |ui| {
                         for path in self.settings.recent.clone() {
@@ -2263,6 +2426,191 @@ impl OrganizerApp {
             });
         self.help_open = open;
     }
+    fn multiroot_dialog(&mut self, context: &egui::Context) {
+        let mut open = self.multi_open;
+        let available = self.busy.is_none();
+        let running = self
+            .busy
+            .as_ref()
+            .is_some_and(|busy| busy.name == "여러 폴더 통합 분석");
+        let (mut add, mut remove, mut scan_all, mut scan_selected, mut export) =
+            (false, false, false, false, false);
+        egui::Window::new("여러 폴더 통합 분석 · 읽기 전용")
+            .open(&mut open).default_size(egui::vec2(1000.0, 760.0)).show(context, |ui| {
+                ui.label("여러 폴더의 파일을 함께 살펴보고, 폴더 사이의 완전 중복을 찾습니다.");
+                ui.label(RichText::new("이 창에서는 파일을 삭제하거나 이동하지 않습니다. 자동 감시는 실행하지 않습니다.").color(ACCENT));
+                ui.horizontal_wrapped(|ui| {
+                    add = ui.add_enabled(available, egui::Button::new("폴더 추가…")).clicked();
+                    let selected = self.multi_folders.iter().any(|folder| folder.selected);
+                    remove = ui.add_enabled(available && selected, egui::Button::new("체크한 폴더 제거")).clicked();
+                    scan_selected = ui.add_enabled(available && selected, egui::Button::new("체크한 폴더 분석")).clicked();
+                    scan_all = ui.add_enabled(available && !self.multi_folders.is_empty(), egui::Button::new("전체 폴더 분석").fill(ACCENT)).clicked();
+                    if running && ui.button("분석 취소 요청").clicked() {
+                        if let Some(busy) = &self.busy { busy.cancel.store(true, Ordering::Relaxed); }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("최대 동시 탐색");
+                    ui.add_enabled(available, egui::DragValue::new(&mut self.multi_workers).range(1..=4));
+                    ui.label("같은 장치·서버는 순서대로 읽습니다. 전체 해시는 순차 처리합니다.");
+                });
+                ui.label("현재 ‘검사 범위 · 보존 설정’의 하위 폴더·숨김·제외·크기 조건을 적용합니다.");
+                if self.multi_folders.is_empty() {
+                    ui.label("‘폴더 추가’에서 분석할 폴더를 하나 이상 등록하세요.");
+                } else {
+                    egui::ScrollArea::vertical().id_salt("multi-inputs").max_height(150.0)
+                        .show_rows(ui, 26.0, self.multi_folders.len(), |ui, range| {
+                            for index in range {
+                                let folder = &mut self.multi_folders[index];
+                                ui.add_enabled(available, egui::Checkbox::new(&mut folder.selected, folder.path.display().to_string()));
+                            }
+                        });
+                }
+                if running {
+                    ui.separator();
+                    ui.horizontal(|ui| { ui.spinner(); ui.strong("읽기 전용 분석 중"); });
+                    egui::ScrollArea::vertical().id_salt("multi-live").max_height(130.0)
+                        .show(ui, |ui| {
+                            for (root_id, progress) in &self.multi_progress {
+                                let label = self.multi_root_labels.get(root_id).map(String::as_str)
+                                    .unwrap_or("선택 폴더 전체 · 중복 분석");
+                                ui.label(label);
+                                ui.label(format!("{} · {}{} · {}", multi_phase_label(&progress.phase), progress.completed,
+                                    progress.total.map(|total| format!(" / {total}")).unwrap_or_default(), progress.message));
+                            }
+                        });
+                }
+                let Some(report) = &self.multi_result else { return; };
+                ui.separator();
+                ui.heading(format!("파일 {}개 · 완전 중복 {}그룹", report.files.len(), report.duplicates.groups.len()));
+                if report.complete {
+                    ui.label(format!("선택 범위 분석 완료 · 경과 {:.2}초", report.timings.elapsed_seconds));
+                } else {
+                    ui.colored_label(ACCENT, if report.cancelled {
+                        "취소된 부분 결과입니다. 전체 선택 범위의 중복 없음 판정이 아닙니다."
+                    } else {
+                        "일부 폴더·파일을 확인하지 못했습니다. 아래 상태와 경고를 확인하세요."
+                    });
+                }
+                egui::CollapsingHeader::new("폴더별 결과와 검사 범위").default_open(true).show(ui, |ui| {
+                    egui::ScrollArea::vertical().id_salt("multi-root-results").max_height(160.0)
+                        .show_rows(ui, 46.0, report.roots.len(), |ui, range| {
+                            for index in range {
+                                let root = &report.roots[index];
+                                ui.add(egui::Label::new(root.requested_path.display().to_string()).truncate())
+                                    .on_hover_text(root.requested_path.display().to_string());
+                                ui.label(format!("{} · 파일 {}개 · {} · {:.2}초 · 경고 {}개", multi_state_label(&root.state),
+                                    root.file_count, bytes_text(root.bytes), root.elapsed_seconds,
+                                    root.warnings.len() + usize::from(root.error.is_some())));
+                            }
+                        });
+                });
+                if self.multi_warning_total > 0 {
+                    egui::CollapsingHeader::new(format!("범위·분석 안내 {}건", self.multi_warning_total)).show(ui, |ui| {
+                        if self.multi_warning_total > self.multi_warnings.len() {
+                            ui.label("화면에는 처음 1,000건까지 표시합니다. 전체 내용은 JSON 보고서에서 확인하세요.");
+                        }
+                        egui::ScrollArea::vertical().id_salt("multi-warnings").max_height(130.0)
+                            .show_rows(ui, 24.0, self.multi_warnings.len(), |ui, range| {
+                                for index in range {
+                                    ui.add(egui::Label::new(&self.multi_warnings[index]).truncate())
+                                        .on_hover_text(&self.multi_warnings[index]);
+                                }
+                            });
+                    });
+                }
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.multi_show_files, false, "완전 중복 그룹");
+                    ui.selectable_value(&mut self.multi_show_files, true, "통합 파일 목록");
+                    export = ui.add_enabled(available, egui::Button::new("JSON 보고서 저장…")).clicked();
+                });
+                ui.label("중복은 전체 SHA-256·실제 바이트·파일 변경 여부를 확인한 결과입니다. 첫 파일이 가장 좋은 원본이라는 뜻은 아닙니다.");
+                if self.multi_show_files {
+                    TableBuilder::new(ui).id_salt("multi-file-table").striped(true)
+                        .column(Column::remainder()).column(Column::initial(100.0))
+                        .column(Column::initial(150.0)).column(Column::initial(150.0))
+                        .max_scroll_height(300.0)
+                        .header(26.0, |mut header| {
+                            for title in ["파일 경로", "크기", "수정일", "생성일"] { header.col(|ui| { ui.strong(title); }); }
+                        }).body(|body| {
+                            body.rows(26.0, report.files.len(), |mut row| {
+                                let file = &report.files[row.index()];
+                                row.col(|ui| { ui.add(egui::Label::new(file.path.display().to_string()).truncate())
+                                    .on_hover_text(file.path.display().to_string()); });
+                                row.col(|ui| { ui.label(bytes_text(file.size)); });
+                                row.col(|ui| { ui.label(file.modified_ns.parse::<i128>().ok().map(date_text).unwrap_or_else(|| "확인 불가".into())); });
+                                row.col(|ui| { ui.label(file.created_ns.as_deref().and_then(|value| value.parse::<i128>().ok()).map(date_text).unwrap_or_else(|| "제공되지 않음".into())); });
+                            });
+                        });
+                } else if self.multi_rows.is_empty() {
+                    ui.label(if report.complete { "선택 범위에서 완전 중복을 찾지 못했습니다." } else { "확인된 완전 중복 그룹이 없습니다. 미완료 범위는 위 안내를 확인하세요." });
+                } else {
+                    egui::ScrollArea::vertical().id_salt("multi-duplicate-table").max_height(300.0)
+                        .show_rows(ui, 28.0, self.multi_rows.len(), |ui, range| {
+                            for index in range {
+                                match self.multi_rows[index] {
+                                    MultiDuplicateRow::Header(group_index) => {
+                                        let group = &report.duplicates.groups[group_index];
+                                        ui.strong(format!("그룹 {} · {}개 파일 · 파일당 {} · {}개 선택 폴더", group_index + 1, group.paths.len(), bytes_text(group.size), group.group_source_count));
+                                    }
+                                    MultiDuplicateRow::File(group_index, file_index) => {
+                                        let path = &report.duplicates.groups[group_index].paths[file_index];
+                                        ui.add(egui::Label::new(format!("    {}", path.display())).truncate())
+                                            .on_hover_text(path.display().to_string());
+                                    }
+                                }
+                            }
+                        });
+                }
+            });
+        self.multi_open = open;
+        if add {
+            if let Some(paths) = rfd::FileDialog::new()
+                .set_title("통합 분석할 폴더 추가 · 여러 개 선택 가능")
+                .pick_folders()
+            {
+                for path in paths {
+                    if !self.multi_folders.iter().any(|folder| folder.path == path) {
+                        if self.multi_folders.len() >= 64 {
+                            self.note("통합 분석은 최대 64개 폴더까지 등록할 수 있습니다.");
+                            break;
+                        }
+                        self.multi_folders.push(MultiFolderInput {
+                            path,
+                            selected: true,
+                        });
+                    }
+                }
+                self.multi_result = None;
+                self.multi_rows.clear();
+            }
+        }
+        if remove {
+            self.multi_folders.retain(|folder| !folder.selected);
+            self.multi_result = None;
+            self.multi_rows.clear();
+        }
+        if add || remove {
+            self.settings.multi_roots = self
+                .multi_folders
+                .iter()
+                .map(|folder| folder.path.clone())
+                .collect();
+            save_settings(&self.settings);
+        }
+        if scan_all || scan_selected {
+            let roots = self
+                .multi_folders
+                .iter()
+                .filter(|folder| scan_all || folder.selected)
+                .map(|folder| folder.path.clone())
+                .collect();
+            self.start_multiroot(context, roots);
+        }
+        if export {
+            self.export_multiroot(context);
+        }
+    }
     fn overview_dialog(&mut self, context: &egui::Context) {
         let Some(overview) = &self.overview else {
             return;
@@ -2347,6 +2695,9 @@ impl OrganizerApp {
         }
     }
     fn dialogs(&mut self, context: &egui::Context) {
+        if self.multi_open {
+            self.multiroot_dialog(context);
+        }
         if self.settings_open {
             self.settings_dialog(context);
         }
@@ -2392,6 +2743,29 @@ impl OrganizerApp {
                 self.error = None;
             }
         }
+    }
+}
+
+fn multi_state_label(state: &str) -> &str {
+    match state {
+        "waiting" => "대기",
+        "scanning" | "scan" => "탐색 중",
+        "complete" => "완료",
+        "partial" => "일부 미완료",
+        "cancelled" => "취소",
+        "failed" => "실패",
+        _ => "상태 확인 필요",
+    }
+}
+
+fn multi_phase_label(phase: &str) -> &str {
+    match phase {
+        "scan_start" | "scan" => "파일 탐색",
+        "duplicates_sample" => "대형 파일 샘플 확인",
+        "duplicates_hash" => "전체 SHA-256 계산",
+        "duplicates_verify" => "실제 바이트 확인",
+        "duplicates" => "완전 중복 확인",
+        _ => "분석 진행",
     }
 }
 

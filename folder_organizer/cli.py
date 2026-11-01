@@ -9,9 +9,27 @@ import time
 from pathlib import Path
 
 
+def _print_json(value: dict) -> None:
+    """Keep Unicode report data usable even through legacy Windows pipes."""
+    if sys.stdout is None:
+        return
+    serialized = json.dumps(value, ensure_ascii=False, indent=2)
+    try:
+        serialized.encode(getattr(sys.stdout, "encoding", None) or "utf-8")
+    except UnicodeEncodeError:
+        serialized = json.dumps(value, ensure_ascii=True, indent=2)
+    print(serialized)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Folder Organizer 로컬 분석 (파일 변경 없음)")
     parser.add_argument("folder", type=Path, help="분석할 폴더")
+    parser.add_argument("--add-folder", action="append", default=[], type=Path,
+                        help="여러 폴더 읽기 전용 통합 분석에 추가할 폴더 (반복 가능)")
+    parser.add_argument("--workers", type=int, default=2, choices=range(1, 5),
+                        help="여러 폴더 탐색의 최대 동시 작업 수 (1~4, 같은 장치는 직렬)")
+    parser.add_argument("--json-multiroot", type=Path,
+                        help="읽기 전용 다중 폴더 v1 보고서 (기존 단일 폴더 형식과 구분)")
     parser.add_argument("--duplicates", action="store_true", help="SHA-256 및 실제 내용 비교")
     parser.add_argument("--similar", action="store_true", help="이름/텍스트/이미지 유사 후보")
     parser.add_argument("--hidden", action="store_true", help="숨김 파일 포함")
@@ -31,9 +49,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-pairs", type=int, default=25_000)
     args = parser.parse_args(argv)
     from .scanner import scan_folder
-    from .matching import find_duplicates, find_similar
+    from .matching import AnalysisSession, find_duplicates, find_similar
     from .reporting import build_report, build_common_report, write_common_csv, write_report
     try:
+        if args.add_folder or args.json_multiroot:
+            if args.similar or any((args.csv, args.json_path, args.html_path, args.json_common, args.csv_common)):
+                raise ValueError("다중 폴더 모드는 파일 조회·완전 중복만 지원합니다. 내보내기는 --json-multiroot를 사용하세요.")
+            from .multiroot import build_multiroot_report, scan_folders, write_multiroot_report
+            result = scan_folders([args.folder, *args.add_folder], recursive=not args.no_recursive,
+                                  include_hidden=args.hidden, exclude_patterns=args.exclude,
+                                  min_size=args.min_size, max_size=args.max_size,
+                                  workers=args.workers, duplicates=args.duplicates)
+            if args.json_multiroot:
+                write_multiroot_report(result, args.json_multiroot)
+                _print_json({"schema": "folder-organizer.multiroot.v1", "action_authority": False,
+                             "roots": len(result.roots), "files": len(result.files),
+                             "exact_groups": len(result.groups), "complete": result.complete,
+                             "cancelled": result.cancelled})
+            else:
+                _print_json(build_multiroot_report(result))
+            return 0 if result.complete and not result.cancelled else 2
         started = time.perf_counter()
         result = scan_folder(args.folder, recursive=not args.no_recursive, include_hidden=args.hidden,
                              exclude_patterns=args.exclude, min_size=args.min_size, max_size=args.max_size)
@@ -42,16 +77,17 @@ def main(argv: list[str] | None = None) -> int:
         duplicate_diagnostics = {}
         similar_groups = None
         diagnostics = {}
+        session = AnalysisSession()
         if args.duplicates:
             started = time.perf_counter()
-            duplicate_groups = find_duplicates(result.files, report=duplicate_diagnostics)
+            duplicate_groups = find_duplicates(result.files, report=duplicate_diagnostics, session=session)
             phases["duplicates"] = time.perf_counter() - started
         if args.similar:
             started = time.perf_counter()
             similar_groups = find_similar(result.files, methods=tuple(args.similar_method or ("name", "text", "image")),
                                   name_threshold=args.name_threshold, text_threshold=args.text_threshold,
                                   image_threshold=args.image_threshold, max_pairs=args.max_pairs, report=diagnostics,
-                                  verified_duplicates=duplicate_groups)
+                                  verified_duplicates=duplicate_groups, session=session)
             phases["similarity"] = time.perf_counter() - started
         native = bool(args.json_path or args.html_path or not (args.json_common or args.csv_common))
         output = build_report(result, duplicates=duplicate_groups, similar=similar_groups,
@@ -80,19 +116,11 @@ def main(argv: list[str] | None = None) -> int:
                    or diagnostics.get("cancelled", False) or diagnostics.get("skipped_count", 0) > 0)
         printable = output if output is not None else {
             "files": len(result.files), "exact_groups": len(duplicate_groups or []), "partial": bool(partial)}
-        serialized = json.dumps(printable, ensure_ascii=False, indent=2)
         if args.json_path:
             write_report(args.json_path, output)
         if args.html_path:
             write_report(args.html_path, output)
-        if sys.stdout is not None:
-            # Redirected Windows pipes can retain a legacy code page even when
-            # report files are UTF-8. JSON escapes preserve Unicode losslessly.
-            try:
-                serialized.encode(getattr(sys.stdout, "encoding", None) or "utf-8")
-            except UnicodeEncodeError:
-                serialized = json.dumps(printable, ensure_ascii=True, indent=2)
-            print(serialized)
+        _print_json(printable)
         return 2 if partial else 0
     except (OSError, ValueError) as exc:
         if sys.stderr is not None:

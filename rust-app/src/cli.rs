@@ -6,6 +6,9 @@ use std::sync::atomic::AtomicBool;
 const HELP: &str = concat!(
     "Folder Organizer Rust — 로컬 파일 분석 (파일 변경 없음)\n\n",
     "사용법: FolderOrganizerRustCLI <폴더> [옵션]\n",
+    "  --add-folder <폴더>  읽기 전용 통합 분석에 폴더 추가 (반복 가능)\n",
+    "  --workers <1~4>     다중 폴더 탐색 상한 (같은 장치/서버는 직렬)\n",
+    "  --json-multiroot <새 파일>  별도 다중 폴더 v1 보고서\n",
     "  --duplicates       SHA-256 및 실제 바이트로 완전 중복 검사\n",
     "  --similar          이름·텍스트·이미지 유사 후보 (삭제 권한 아님)\n",
     "  --similar-method <name|text|image>  비교 근거 (반복 가능, 기본 모두)\n",
@@ -54,6 +57,9 @@ pub fn run(arguments: Vec<String>) -> AppResult<i32> {
         "--csv-common",
         "--json-common",
         "--html",
+        "--add-folder",
+        "--workers",
+        "--json-multiroot",
     ];
     let mut args = arguments.into_iter().flat_map(|value| {
         if let Some((option, setting)) = value.split_once('=') {
@@ -64,6 +70,9 @@ pub fn run(arguments: Vec<String>) -> AppResult<i32> {
         vec![value]
     });
     let mut folder = None;
+    let mut additional_folders = Vec::new();
+    let mut workers = 2_usize;
+    let mut multi_json = None;
     let mut options = ScanOptions::default();
     let mut similar_options = similarity::SimilarOptions::default();
     let mut explicit_methods = false;
@@ -83,6 +92,25 @@ pub fn run(arguments: Vec<String>) -> AppResult<i32> {
             "--duplicates" => duplicates = true,
             "--similar" => similar = true,
             "--cli" => {}
+            "--add-folder" => additional_folders.push(PathBuf::from(
+                args.next().ok_or("--add-folder 폴더 경로가 필요합니다.")?,
+            )),
+            "--workers" => {
+                workers = args
+                    .next()
+                    .ok_or("--workers 값이 필요합니다.")?
+                    .parse()
+                    .map_err(|_| "--workers 값은 1~4 사이 정수여야 합니다.")?;
+                if !(1..=4).contains(&workers) {
+                    return Err("--workers 값은 1~4 사이 정수여야 합니다.".into());
+                }
+            }
+            "--json-multiroot" => {
+                multi_json = Some(PathBuf::from(
+                    args.next()
+                        .ok_or("--json-multiroot 파일 경로가 필요합니다.")?,
+                ))
+            }
             "--similar-method" => {
                 let method = args.next().ok_or("--similar-method 값이 필요합니다.")?;
                 if !explicit_methods {
@@ -180,6 +208,41 @@ pub fn run(arguments: Vec<String>) -> AppResult<i32> {
     }
     let folder = folder.ok_or_else(|| HELP.to_owned())?;
     let cancel = AtomicBool::new(false);
+    if !additional_folders.is_empty() || multi_json.is_some() {
+        if similar
+            || csv.is_some()
+            || json.is_some()
+            || html.is_some()
+            || common_csv.is_some()
+            || common_json.is_some()
+        {
+            return Err("다중 폴더 모드는 파일 조회·완전 중복만 지원합니다. 내보내기는 --json-multiroot를 사용하세요.".into());
+        }
+        let mut roots = vec![folder];
+        roots.extend(additional_folders);
+        let result =
+            crate::multiroot::analyze(&roots, &options, duplicates, workers, &cancel, None)?;
+        if let Some(path) = multi_json {
+            reporting::export_multiroot_json(&result, &path)?;
+            println!(
+                "{}",
+                serde_json::json!({"schema": result.schema,
+                "action_authority": false, "roots": result.roots.len(), "files": result.files.len(),
+                "exact_groups": result.duplicates.groups.len(), "complete": result.complete,
+                "cancelled": result.cancelled})
+            );
+        } else {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&result).map_err(|error| error.to_string())?
+            );
+        }
+        return Ok(if result.complete && !result.cancelled {
+            0
+        } else {
+            2
+        });
+    }
     let scan = core::scan(&folder, &options, &cancel, None)?;
     let analysis = if duplicates || similar {
         Some(core::analyze_duplicates(&scan, &cancel, None)?)

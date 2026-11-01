@@ -1,5 +1,13 @@
 # Changelog
 
+## 개발 중 · 확장 기술보고서 반영
+
+- Python·Rust에 여러 폴더 선택·읽기 전용 통합 파일/완전 중복 분석과 별도 JSON 계약을 추가했습니다. 중복·중첩 루트, 하드링크, 접근 실패·취소와 조회 범위를 보존하며 기존 단일 폴더 정리·복원 API와 분리합니다.
+- Python은 한 분석의 인증된 다른 해시를 재사용해 유사 후보의 불필요한 바이트 재읽기를 줄이고 최대 16,384개로 제한합니다. 파일 스냅샷 검증과 실제 중복의 SHA-256·바이트 증명은 유지합니다.
+- Rust는 Unicode 이름 특징의 반복 계산과 미지원 형식의 텍스트 캐시 점유를 줄이고, 단일·다중 폴더에 같은 검증 코어와 GUI 작업 실행기를 재사용합니다.
+- 새 분석 창의 취소·닫기·다시 열기와 부분 결과를 보완하고, 향후 Windows 패키지 확인의 JSON·PNG·명령·해시를 실패 후에도 보존합니다.
+- 보고서의 확인된 사실·설계 제안·정확도 해석 오류를 문서화했습니다. 기존 공개 v0.7.0 태그·배포 파일은 그대로 유지합니다.
+
 ## 0.7.0 — 2026-10-29 · Report-driven review
 
 - Add Rust's large-file sample prefilter while retaining full SHA-256, byte proof and snapshot checks; record actual sample/hash/comparison reads and explicit partial-file failures.

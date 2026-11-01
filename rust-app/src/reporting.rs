@@ -31,6 +31,31 @@ fn spreadsheet_cell(value: &str) -> String {
         value.to_owned()
     }
 }
+
+/// The multi-root report is deliberately separate from operation journals and
+/// the single-root v1 contract. Export never writes inside the analyzed scope.
+pub fn export_multiroot_json(
+    result: &crate::multiroot::MultiAnalysis,
+    path: &Path,
+) -> AppResult<()> {
+    let parent = path
+        .parent()
+        .filter(|value| !value.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let directory = parent.canonicalize().map_err(|error| error.to_string())?;
+    if result
+        .roots
+        .iter()
+        .filter_map(|root| root.path.as_ref())
+        .any(|root| directory.starts_with(root))
+    {
+        return Err("원본 폴더 밖의 새 보고서 경로를 선택하세요.".into());
+    }
+    let mut output = writer(path)?;
+    serde_json::to_writer_pretty(&mut output, result).map_err(|error| error.to_string())?;
+    output.write_all(b"\n").map_err(|error| error.to_string())?;
+    finish(output)
+}
 pub fn export_csv(scan: &ScanResult, path: &Path) -> AppResult<()> {
     let output = writer(path)?;
     let mut csv = csv::WriterBuilder::new()

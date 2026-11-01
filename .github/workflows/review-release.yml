@@ -180,6 +180,9 @@ jobs:
           New-Item -ItemType Directory review-results
           Copy-Item dist/PYTHON_PACKAGE_CHECK.json,dist/EDITIONS_BENCHMARK_0.7.0.json review-results/
           if (Test-Path dist/PYTHON_PACKAGE_GUI.png) { Copy-Item dist/PYTHON_PACKAGE_GUI.png review-results/ }
+          foreach ($name in @('PYTHON_PACKAGE_CLI_REPORT.json', 'PYTHON_PACKAGE_CLI.stdout.txt', 'PYTHON_PACKAGE_CLI.stderr.txt')) {
+            if (Test-Path "dist/$name") { Copy-Item "dist/$name" review-results/ }
+          }
           if (Test-Path dist/PRIOR_PACKAGE_LOG.txt) { Copy-Item dist/PRIOR_PACKAGE_LOG.txt review-results/ }
           '{"native_gui_rendered":true,"version":"0.7.0","unchanged_feature_tests":"skipped"}' | Set-Content -Encoding utf8 review-results/RUST_GUI_CHECK.json
       - uses: actions/upload-artifact@v4
@@ -187,6 +190,22 @@ jobs:
           name: FolderOrganizer-v070-review
           retention-days: 14
           path: review-results/*
+      - name: Preserve produced evidence even when a later check or log fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FolderOrganizer-v070-raw-evidence
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            dist/PYTHON_PACKAGE_CHECK.json
+            dist/PYTHON_PACKAGE_GUI.png
+            dist/PYTHON_PACKAGE_CLI_REPORT.json
+            dist/PYTHON_PACKAGE_CLI.stdout.txt
+            dist/PYTHON_PACKAGE_CLI.stderr.txt
+            dist/EDITIONS_BENCHMARK_0.7.0.json
+            dist/PRIOR_PACKAGE_LOG.txt
+            review-results/RUST_GUI_CHECK.json
   publish:
     name: Publish reviewed release
     needs: [build, native, reuse, review]

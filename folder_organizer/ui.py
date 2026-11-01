@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 
 from . import __version__
 from . import updater
-from .matching import AnalysisCache, find_duplicates, find_similar
+from .matching import AnalysisCache, AnalysisSession, find_duplicates, find_similar
 from .models import FileEntry, MatchGroup, ScanResult
 from .operations import build_plan, execute_plan, list_history, undo_operation
 from .recovery import inspect_file, repair_file
@@ -631,6 +631,8 @@ class MainWindow(QMainWindow):
         self._progress_snapshot = None
         self._progress_tracker = ProgressTracker()
         self._analysis_cache = AnalysisCache()
+        self._analysis_session = AnalysisSession()
+        self._multi_root_dialog = None
         self._history_dialog = None
         self._log_dialog = None
         self._help_dialog = None
@@ -677,6 +679,10 @@ class MainWindow(QMainWindow):
             self._work_controls.append(button)
         return button
 
+    def _clear_analysis_cache(self):
+        self._analysis_cache.clear()
+        self._analysis_session = AnalysisSession()
+
     def _menu_action(self, menu, text, callback, *, shortcut=None, work=True):
         action = menu.addAction(text)
         action.triggered.connect(lambda _checked=False: callback())
@@ -691,6 +697,7 @@ class MainWindow(QMainWindow):
         bar.setNativeMenuBar(False)
         self.file_menu = bar.addMenu("파일")
         self._menu_action(self.file_menu, "폴더 선택…", self.choose_folder, shortcut="Ctrl+O")
+        self._menu_action(self.file_menu, "여러 폴더 통합 분석…", self.show_multiroot, shortcut="Ctrl+Shift+O")
         self.recent_menu = self.file_menu.addMenu("최근 폴더")
         self._refresh_recent_menu()
         self._work_controls.append(self.recent_menu.menuAction())
@@ -1406,6 +1413,14 @@ class MainWindow(QMainWindow):
             self.status_label.setText("진행 중인 파일 처리가 끝나면 분석을 중단합니다…")
 
     def closeEvent(self, event):
+        if self._multi_root_dialog is not None and self._multi_root_dialog.is_running():
+            self._close_requested = True
+            if not getattr(self, "_multiroot_close_waiting", False):
+                self._multiroot_close_waiting = True
+                self._multi_root_dialog.finished.connect(self.close, Qt.ConnectionType.QueuedConnection)
+            self._multi_root_dialog.close()
+            event.ignore()
+            return
         file_busy = self._merge_execute_pending or (self._worker is not None and self._worker.isRunning())
         update_busy = self._update_worker is not None and self._update_worker.isRunning()
         merge_preview = self._merge_dialog._worker if self._merge_dialog is not None else None
@@ -1604,7 +1619,7 @@ class MainWindow(QMainWindow):
             self.status_label.setText("이름 기준을 변경했습니다. 새 기준으로 유사 검사를 다시 실행하세요.")
 
     def _inventory_option_changed(self):
-        self._analysis_cache.clear()
+        self._clear_analysis_cache()
         self.settings.setValue("analysis/recursive", self.recursive_check.isChecked())
         self.settings.setValue("analysis/hidden", self.hidden_check.isChecked())
         if self.scan_result is not None:
@@ -1642,7 +1657,7 @@ class MainWindow(QMainWindow):
         scope_changed = any(previous[key] != self.analysis_options[key] for key in ("exclude_patterns", "min_size", "max_size"))
         self._clear_match_results()
         if scope_changed and self.root:
-            self._analysis_cache.clear()
+            self._clear_analysis_cache()
             self.start_scan()
         else:
             self.status_label.setText("검사 설정을 저장했습니다. 변경한 기준으로 중복 또는 유사 검사를 실행하세요.")
@@ -1672,10 +1687,31 @@ class MainWindow(QMainWindow):
         if path:
             self._open_folder(path)
 
+    def show_multiroot(self):
+        if self._is_busy or self._close_requested:
+            return
+        if self._multi_root_dialog is not None:
+            self._multi_root_dialog.raise_()
+            self._multi_root_dialog.activateWindow()
+            return
+        from .multiroot_view import MultiRootDialog
+        options = {key: self.analysis_options[key] for key in ("exclude_patterns", "min_size", "max_size")}
+        options.update(recursive=self.recursive_check.isChecked(), include_hidden=self.hidden_check.isChecked())
+        dialog = MultiRootDialog(self, scan_options=options)
+        self._multi_root_dialog = dialog
+        if self.root:
+            dialog.add_paths([self.root])
+        def closed(_result):
+            if self._multi_root_dialog is dialog:
+                self._multi_root_dialog = None
+            dialog.deleteLater()
+        dialog.finished.connect(closed)
+        dialog.open()
+
     def _open_folder(self, path):
         if self._is_busy or self._close_requested:
             return
-        self._analysis_cache.clear()
+        self._clear_analysis_cache()
         self._remember_next_scan = True
         self.root = str(Path(path).expanduser().absolute())
         self.folder_input.setText(self.root)
@@ -1693,6 +1729,7 @@ class MainWindow(QMainWindow):
         if not self.root:
             self.choose_folder()
             return
+        self._clear_analysis_cache()
         root = self.root
         recursive = self.recursive_check.isChecked()
         hidden = self.hidden_check.isChecked()
@@ -1716,7 +1753,7 @@ class MainWindow(QMainWindow):
             self._remember_next_scan = False
             self._remember_folder(result.root)
         if previous_root is not None and previous_root != result.root:
-            self._analysis_cache.clear()
+            self._clear_analysis_cache()
         self.model.set_entries(result.files)
         self.table.setVisible(bool(result.files))
         self.empty_state.setVisible(not result.files)
@@ -1801,9 +1838,10 @@ class MainWindow(QMainWindow):
         if not self._require_scan():
             return
         files = list(self.model.entries)
+        session = self._analysis_session
         def task(worker):
             report = {}
-            groups = find_duplicates(files, cancel=worker.cancel_event, progress=worker.report, progress_detail=worker.report_detail, report=report)
+            groups = find_duplicates(files, cancel=worker.cancel_event, progress=worker.report, progress_detail=worker.report_detail, report=report, session=session)
             return groups, worker.cancel_event.is_set(), report
         self._start_task("SHA-256과 실제 내용을 비교하고 있습니다…", task,
                          lambda result: self._load_groups(result[0], "duplicate", result[2]) if not result[1] else None,
@@ -1814,12 +1852,15 @@ class MainWindow(QMainWindow):
             return
         files = list(self.model.entries)
         options = dict(self.analysis_options)
+        session = self._analysis_session
+        verified = list(self.groups) if self.match_kind == "duplicate" else None
         def task(worker):
             report = {}
             groups = find_similar(files, cancel=worker.cancel_event, progress=worker.report, progress_detail=worker.report_detail, cache=self._analysis_cache,
                                   methods=tuple(options["methods"]),
                                   name_threshold=options["name_threshold"], text_threshold=options["text_threshold"],
                                   image_threshold=options["image_threshold"], report=report,
+                                  session=session, verified_duplicates=verified,
                                   search_mode=options["search_mode"], max_candidates_per_file=options["max_candidates_per_file"])
             return groups, worker.cancel_event.is_set(), report
         self._start_task("선택한 이름 · 텍스트 · 이미지 기준으로 검토 후보를 찾고 있습니다…", task,
@@ -2207,7 +2248,7 @@ class MainWindow(QMainWindow):
             self.scan_result.files = [entry for entry in self.scan_result.files if entry.path not in removed]
             self.load_scan_result(self.scan_result)
             self._load_groups([group for group in kept_groups if group.paths], "duplicate", previous_report)
-        self._analysis_cache.clear()
+        self._clear_analysis_cache()
         self._fast_removal_completed = True
         success = result.get("status") in {"completed", "unchanged"}
         if not success:
@@ -2358,7 +2399,7 @@ class MainWindow(QMainWindow):
         log_event("operation.result", "파일 작업 결과", operation_id=str(result.get("id", self._task_id)),
                   level="ERROR" if result.get("status") == "failed" else "WARNING" if result.get("status") in {"partial", "partial_undo"} else "INFO",
                   details={"status": result.get("status"), "items": len(result.get("items", []))})
-        self._analysis_cache.clear()
+        self._clear_analysis_cache()
         self.scan_complete = False
         self._show_details("파일 작업 결과", result)
         self.start_scan()
@@ -2661,7 +2702,7 @@ class MainWindow(QMainWindow):
         dialog.open()
 
     def _merge_done(self, result):
-        self._analysis_cache.clear()
+        self._clear_analysis_cache()
         self.scan_complete = False
         self._show_details("내용 병합 결과", result)
         self.start_scan()

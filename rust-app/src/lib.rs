@@ -2,6 +2,7 @@
 pub mod cli;
 pub mod core;
 pub mod merging;
+pub mod multiroot;
 pub mod operations;
 pub mod recovery;
 pub mod reporting;

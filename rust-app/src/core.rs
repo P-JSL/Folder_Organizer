@@ -19,7 +19,7 @@ const CONTENT_LIMIT: u64 = 4 * 1024 * 1024;
 const CONTENT_BUDGET: usize = 16 * 1024 * 1024;
 const SAMPLE_MIN_SIZE: u64 = 1024 * 1024;
 const SAMPLE_BYTES: usize = 64 * 1024;
-const DUPLICATE_WARNING_LIMIT: usize = 1000;
+pub(crate) const DUPLICATE_WARNING_LIMIT: usize = 1000;
 type ProofMac = Hmac<Sha256>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -981,28 +981,53 @@ pub fn analyze_duplicates(
     if scan.cancelled {
         return Err("완료되지 않은 목록으로 중복을 정리할 수 없습니다.".into());
     }
+    let warnings = scan
+        .warnings
+        .iter()
+        .take(DUPLICATE_WARNING_LIMIT)
+        .map(|message| DuplicateWarning {
+            path: scan.root.clone(),
+            phase: "inventory".into(),
+            message: message.clone(),
+        })
+        .collect();
+    analyze_duplicate_files(
+        &scan.files,
+        warnings,
+        scan.warnings.len() as u64,
+        cancel,
+        progress,
+    )
+}
+
+/// Shared exact-analysis kernel. Callers forward bounded warning details and the
+/// actual inventory-warning count separately, so large omissions do not require
+/// cloning every warning. No synthetic root or write boundary is introduced.
+pub(crate) fn analyze_duplicate_files(
+    files: &[FileEntry],
+    inventory_warnings: Vec<DuplicateWarning>,
+    total_inventory_warning_count: u64,
+    cancel: &AtomicBool,
+    progress: Option<&dyn Fn(Progress)>,
+) -> AppResult<DuplicateAnalysis> {
     if cancel.load(Ordering::Relaxed) {
         return Err("중복 검사를 취소했습니다.".into());
     }
+    let warning_count = total_inventory_warning_count.max(inventory_warnings.len() as u64);
+    let warning_details = inventory_warnings.len().min(DUPLICATE_WARNING_LIMIT) as u64;
     let mut analysis = DuplicateAnalysis {
         groups: vec![],
-        warnings: scan
-            .warnings
-            .iter()
+        warnings: inventory_warnings
+            .into_iter()
             .take(DUPLICATE_WARNING_LIMIT)
-            .map(|message| DuplicateWarning {
-                path: scan.root.clone(),
-                phase: "inventory".into(),
-                message: message.clone(),
-            })
             .collect(),
-        warning_count: scan.warnings.len() as u64,
-        warnings_truncated: scan.warnings.len() > DUPLICATE_WARNING_LIMIT,
-        complete: scan.warnings.is_empty(),
+        warning_count,
+        warnings_truncated: warning_count > warning_details,
+        complete: warning_count == 0,
         metrics: DuplicateMetrics::default(),
     };
     let mut sizes: HashMap<u64, Vec<&FileEntry>> = HashMap::new();
-    for file in &scan.files {
+    for file in files {
         sizes.entry(file.size).or_default().push(file);
     }
     let mut sizes: Vec<_> = sizes

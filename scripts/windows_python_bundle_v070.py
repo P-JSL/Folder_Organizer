@@ -10,6 +10,7 @@ import argparse
 from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -22,6 +23,62 @@ import time
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def file_evidence(path: Path) -> dict:
+    with path.open("rb") as stream:
+        checksum = hashlib.file_digest(stream, "sha256").hexdigest()
+    return {"file": path.name, "bytes": path.stat().st_size, "sha256": checksum}
+
+
+class PackageEvidence:
+    """Persist phase and process evidence before any optional console output.
+
+    A failed update leaves the previous complete JSON intact. A later test or
+    log failure cannot turn unfinished package checks into a passing receipt.
+    """
+    def __init__(self, directory: Path):
+        self.directory = directory
+        self.path = directory / "PYTHON_PACKAGE_CHECK.json"
+        self.record = {"schema": "folder-organizer.package-evidence.v1", "edition": "Python",
+                       "status": "running", "phase": "initialization", "commands": [],
+                       "started_at": datetime.now(timezone.utc).isoformat(),
+                       "source_commit": os.environ.get("GITHUB_SHA"),
+                       "workflow_run": os.environ.get("GITHUB_RUN_ID"),
+                       "python_driver": sys.version, "platform": sys.platform,
+                       "previously_passed_suites": "not rerun"}
+
+    def save(self, **values) -> None:
+        updated = {**self.record, **values}
+        self.directory.mkdir(parents=True, exist_ok=True)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.directory,
+                                             prefix=".package-evidence-", suffix=".tmp",
+                                             delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump(updated, stream, indent=2, ensure_ascii=False)
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.path)
+            self.record = updated
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+    def __enter__(self):
+        self.save()
+        return self
+
+    def __exit__(self, error_type, error, traceback):
+        if error is None:
+            self.save(status="passed", phase="completed",
+                      finished_at=datetime.now(timezone.utc).isoformat())
+        else:
+            self.save(status="failed", error={"type": error_type.__name__, "message": str(error)},
+                      finished_at=datetime.now(timezone.utc).isoformat())
+        return False
 
 
 @contextmanager
@@ -135,15 +192,10 @@ def capture_window(hwnd: int, destination: Path) -> dict:
         user32.ReleaseDC(hwnd, screen)
 
 
-def main() -> None:
-    if sys.platform != "win32":
-        raise RuntimeError("The changed package must be exercised on native Windows")
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--directory", type=Path, default=ROOT / "dist/FolderOrganizer")
-    args = parser.parse_args()
-    package = args.directory.resolve()
+def check_package(package: Path, evidence: PackageEvidence) -> None:
     program = package / "FolderOrganizer.exe"
     marker = json.loads((package / "version.json").read_text(encoding="utf-8"))
+    evidence.save(version=marker["version"], phase="package-layout", executable=file_evidence(program))
     files = {path.relative_to(package).as_posix().casefold() for path in package.rglob("*") if path.is_file()}
     if any("/qml/" in name or name.endswith(("designer.exe", "linguist.exe", "assistant.exe")) for name in files):
         raise RuntimeError("The Widgets build still contains unused QML/development tools")
@@ -169,10 +221,28 @@ def main() -> None:
         report_path = scratch / "읽기 전용 검사.json"
         environment = {**os.environ, "LOCALAPPDATA": str(scratch / "LocalAppData"),
                        "APPDATA": str(scratch / "AppData"), "QT_QPA_PLATFORM": "windows"}
-        result = subprocess.run([str(program), "--cli", str(fixture), "--duplicates", "--similar",
-                                 "--similar-method", "image", "--image-threshold", "0.6", "--max-pairs", "100",
-                                 "--json", str(report_path)], timeout=90, env=environment,
+        command = {"name": "image-and-exact-cli", "argv": [str(program), "--cli", str(fixture),
+                   "--duplicates", "--similar", "--similar-method", "image", "--image-threshold",
+                   "0.6", "--max-pairs", "100", "--json", str(report_path)], "exit_code": None}
+        evidence.record["commands"].append(command)
+        evidence.save(phase="image-and-exact-cli")
+        try:
+            result = subprocess.run(command["argv"], timeout=90, env=environment,
                                 capture_output=True, text=True, encoding="utf-8", errors="replace")
+        except subprocess.TimeoutExpired:
+            command["timed_out"] = True
+            evidence.save()
+            raise
+        command["exit_code"] = result.returncode
+        for name, content in (("stdout", result.stdout), ("stderr", result.stderr)):
+            path = evidence.directory / f"PYTHON_PACKAGE_CLI.{name}.txt"
+            path.write_text(content, encoding="utf-8")
+            command[name] = file_evidence(path)
+        if report_path.is_file():
+            persisted_report = evidence.directory / "PYTHON_PACKAGE_CLI_REPORT.json"
+            persisted_report.write_bytes(report_path.read_bytes())
+            command["report"] = file_evidence(persisted_report)
+        evidence.save()
         if result.returncode:
             raise RuntimeError(f"New bundled image/CLI fixture failed: {result.returncode}: {result.stderr}")
         report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -186,13 +256,19 @@ def main() -> None:
             raise RuntimeError(f"A supported bundled image decoder is unavailable: {expected_formats - image_names}")
         if original != {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in fixture.iterdir()}:
             raise RuntimeError("The package check modified an original fixture")
+        evidence.save(phase="native-gui", fixture_files=9, exact_groups=2,
+                      decoded_image_formats=sorted(expected_formats), source_bytes_unchanged=True)
         with offline_updates():
+            gui_command = {"name": "native-widgets-gui", "argv": [str(program)], "exit_code": None}
+            evidence.record["commands"].append(gui_command)
+            evidence.save()
             process = subprocess.Popen([str(program)], cwd=scratch, env=environment)
             try:
                 hwnd = main_window(process)
                 time.sleep(0.5)
                 screenshot = ROOT / "dist/PYTHON_PACKAGE_GUI.png"
                 capture = capture_window(hwnd, screenshot)
+                evidence.save(gui={**capture, "artifact": file_evidence(screenshot)})
                 ctypes.windll.user32.PostMessageW(wintypes.HWND(hwnd), 0x0010, 0, 0)
                 process.wait(timeout=15)
                 if process.returncode:
@@ -201,13 +277,21 @@ def main() -> None:
                 if process.poll() is None:
                     process.terminate()
                     process.wait(timeout=15)
-        proof = {"edition": "Python", "version": marker["version"], "fixture_files": 9,
-                 "exact_groups": 2, "decoded_image_formats": sorted(expected_formats),
-                 "source_bytes_unchanged": True, "gui": capture,
-                 "previously_passed_suites": "not rerun"}
-        (ROOT / "dist/PYTHON_PACKAGE_CHECK.json").write_text(
-            json.dumps(proof, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        print(json.dumps(proof, ensure_ascii=True))
+                gui_command["exit_code"] = process.returncode
+                evidence.save()
+
+
+def main() -> None:
+    if sys.platform != "win32":
+        raise RuntimeError("The changed package must be exercised on native Windows")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--directory", type=Path, default=ROOT / "dist/FolderOrganizer")
+    args = parser.parse_args()
+    with PackageEvidence(ROOT / "dist") as evidence:
+        check_package(args.directory.resolve(), evidence)
+    # The complete receipt and capture are durable even if console delivery
+    # fails. ASCII keeps the console independent of the Windows active locale.
+    print(json.dumps(evidence.record, ensure_ascii=True))
 
 
 if __name__ == "__main__":

@@ -45,6 +45,7 @@ INDEX_SKETCH_SIZE = 8
 MAX_INDEX_KEYS = 65_536
 NAME_INDEX_CACHE_ENTRIES = 128
 NAME_SCORE_CACHE_ENTRIES = 4096
+MAX_READ_HINT_FILES = 16_384
 _DUPLICATE_PROOF_KEY = secrets.token_bytes(32)
 _DUPLICATE_READS = threading.local()
 
@@ -346,6 +347,80 @@ def _equal(first: FileEntry, second: FileEntry, cancel: Event | None) -> bool:
     return equal
 
 
+class AnalysisSession:
+    """Process-local read hints for one inventory's exact/similarity analysis.
+
+    Unequal full or sample hashes can rule out byte identity without streaming
+    both files again. They cannot establish equality, issue a duplicate proof,
+    or authorize an operation. At most ``MAX_READ_HINT_FILES`` read records are
+    retained; later pairs safely fall back to streaming. Each suggested pair
+    reopens its current snapshots and checks them against the original read.
+    No hashes are persisted
+    in reports, and an HMAC rejects edited or imported hint records.
+    """
+    def __init__(self):
+        self._snapshots: dict[str, dict] = {}
+        self._signature: bytes | None = None
+        self._lock = threading.Lock()
+
+    def clear(self) -> None:
+        with self._lock:
+            self._snapshots, self._signature = {}, None
+
+    @staticmethod
+    def _sign(snapshots: dict[str, dict]) -> bytes:
+        signature = hmac.new(_DUPLICATE_PROOF_KEY,
+                             b"similarity-negative-read-hints-v1\n", hashlib.sha256)
+        # Stream bounded metadata records instead of materializing another
+        # potentially large JSON copy of the entire inventory.
+        for path, original in snapshots.items():
+            record = json.dumps({"path": path, "read": original}, ensure_ascii=True,
+                                sort_keys=True, separators=(",", ":"), allow_nan=False).encode("ascii")
+            signature.update(len(record).to_bytes(8, "big"))
+            signature.update(record)
+        return signature.digest()
+
+    def _capture(self, snapshots: dict[str, dict], skipped_paths: set[str]) -> None:
+        records = {}
+        for path, original in snapshots.items():
+            if path in skipped_paths or not ("sha256" in original or "sample_sha256" in original):
+                continue
+            if len(records) >= MAX_READ_HINT_FILES:
+                break
+            records[path] = original
+        signature = self._sign(records)
+        with self._lock:
+            self._snapshots, self._signature = records, signature
+
+    def _read_hints(self) -> dict[str, dict]:
+        with self._lock:
+            records, signature = self._snapshots, self._signature
+        if signature is None:
+            return {}
+        try:
+            valid = hmac.compare_digest(signature, self._sign(records))
+        except (TypeError, ValueError, RecursionError, OverflowError) as exc:
+            raise ValueError("Analysis session was changed; start a fresh analysis") from exc
+        if not valid:
+            raise ValueError("Analysis session was changed; start a fresh analysis")
+        return records
+
+
+def _different_read_hints(first: FileEntry, second: FileEntry,
+                          hints: dict[str, dict]) -> dict[str, dict]:
+    """Return original reads only when a shared hash kind proves a difference.
+
+    The caller must validate these snapshots before retaining the pair. Equal
+    hashes, including equal samples, deliberately do not answer byte equality.
+    """
+    left, right = hints.get(first.path), hints.get(second.path)
+    if left is not None and right is not None:
+        for key in ("sha256", "sample_sha256"):
+            if key in left and key in right and left[key] != right[key]:
+                return {first.path: left, second.path: right}
+    return {}
+
+
 def _ordered_files(files: list[FileEntry]) -> list[FileEntry]:
     """Avoid repeating O(n log n) ordering for an already ordered inventory."""
     previous = None
@@ -362,6 +437,7 @@ def find_duplicates(
     progress: Callable[[str], None] | None = None,
     *, progress_detail: Callable[[dict], None] | None = None,
     report: dict | None = None,
+    session: AnalysisSession | None = None,
 ) -> list[MatchGroup]:
     """Return exact duplicate groups; inaccessible or stale snapshots are skipped.
 
@@ -369,6 +445,10 @@ def find_duplicates(
     verified exact group but reclaim no bytes. No read error creates a digest.
     Cancellation returns an empty result, never an incomplete suggestion list.
     """
+    if session is not None:
+        if type(session) is not AnalysisSession:
+            raise ValueError("Use an AnalysisSession instance for read hints")
+        session.clear()
     groups: list[MatchGroup] = []
     progress_detail = _sampled_progress(progress_detail)
     hash_snapshots = {}
@@ -519,6 +599,8 @@ def find_duplicates(
                     skipped(entry, "final_snapshot", exc)
         groups = [group for group in groups if not skipped_paths.intersection(group.paths)]
         _check_cancel(cancel)
+        if session is not None:
+            session._capture(hash_snapshots, skipped_paths)
         _detail(progress_detail, "duplicate_complete", len(files), len(files), "files", "중복 검사를 완료했습니다.", terminal=True)
     except _Cancelled:
         summary["complete"] = False
@@ -812,6 +894,7 @@ def find_similar(
     cache: AnalysisCache | None = None,
     search_mode: str = "auto", max_candidates_per_file: int = 32,
     verified_duplicates: list[MatchGroup] | None = None,
+    session: AnalysisSession | None = None,
 ) -> list[MatchGroup]:
     """Suggest directly similar pairs by filename, small UTF-8 text or image.
 
@@ -833,6 +916,8 @@ def find_similar(
     effective thresholds and all available enabled metrics in ``evidence``.
     Live authenticated ``verified_duplicates`` may be reused after metadata
     revalidation; imported reports cannot replace a real duplicate analysis.
+    A shared transient ``session`` also reuses negative full/sample hash reads;
+    different hashes avoid a second pair stream after snapshot revalidation.
     """
     def checked_threshold(value: float, label: str) -> float:
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0.5 <= value <= 1:
@@ -860,6 +945,10 @@ def find_similar(
         raise ValueError("Search mode must be auto, complete or indexed.")
     if type(max_candidates_per_file) is not int or not 1 <= max_candidates_per_file <= 128:
         raise ValueError("Candidates per file must be between 1 and 128.")
+    if session is None:
+        session = AnalysisSession()
+    elif type(session) is not AnalysisSession:
+        raise ValueError("Use an AnalysisSession instance for read hints")
     summary = report if report is not None else {}
     summary.clear()
     summary.update({
@@ -873,6 +962,9 @@ def find_similar(
         "index_keys": 0, "index_keys_retained_peak": 0, "index_evictions": 0,
         "index_key_limit": MAX_INDEX_KEYS, "index_posting_limit": INDEX_POSTING_LIMIT,
         "max_candidates_per_file": max_candidates_per_file, "candidate_limit_reached": False,
+        "read_hint_files": 0, "exact_difference_hints": 0,
+        "read_hint_limit": MAX_READ_HINT_FILES,
+        "byte_comparison_pairs": 0, "byte_comparison_bytes": 0,
     })
     warning_keys: set[str] = set()
 
@@ -908,7 +1000,7 @@ def find_similar(
         summary["exact_results_reused"] = verified_duplicates is not None
         if verified_duplicates is None:
             exact_groups = find_duplicates(eligible_files, cancel=cancel, progress=exact_progress,
-                                           progress_detail=progress_detail)
+                                           progress_detail=progress_detail, session=session)
         else:
             exact_groups = []
             by_path = {entry.path: entry for entry in files}
@@ -926,6 +1018,8 @@ def find_similar(
                 except OSError as exc:
                     notice(f"Skipped reused exact group: {exc}", warning=True, skipped=True)
         _check_cancel(cancel)
+        read_hints = session._read_hints()
+        summary["read_hint_files"] = len(read_hints)
         exact_membership = {path: index for index, group in enumerate(exact_groups) for path in group.paths}
         if exact_groups:
             notice(f"Verified {len(exact_groups):,} exact duplicate groups; byte-identical pairs are excluded from similarity results.")
@@ -1065,12 +1159,24 @@ def find_similar(
                 elif metrics[method] is not None and metrics[method] < cutoffs[method]:
                     limitations.append(f"{label} 유사도 {metrics[method]:.1%}는 선택한 기준 {cutoffs[method]:.1%} 미만입니다.")
             byte_identical: bool | None = False if first.size != second.size else None
+            difference_hints = {}
             if byte_identical is None:
+                difference_hints = _different_read_hints(first, second, read_hints)
+            if difference_hints:
+                byte_identical = False
+                summary["exact_difference_hints"] += 1
+            elif byte_identical is None:
                 try:
-                    if _equal(first, second, cancel):
-                        summary["exact_pairs_excluded"] += 1
-                        notice(f"Byte-identical pair excluded from similarity: {first.relative_path} / {second.relative_path}")
-                        continue
+                    previous_metrics = getattr(_DUPLICATE_READS, "metrics", None)
+                    _DUPLICATE_READS.metrics = summary
+                    summary["byte_comparison_pairs"] += 1
+                    try:
+                        if _equal(first, second, cancel):
+                            summary["exact_pairs_excluded"] += 1
+                            notice(f"Byte-identical pair excluded from similarity: {first.relative_path} / {second.relative_path}")
+                            continue
+                    finally:
+                        _DUPLICATE_READS.metrics = previous_metrics
                     byte_identical = False
                 except OSError as exc:
                     limitations.append("바이트 비교를 완료하지 못해 완전 중복 여부는 확인되지 않았습니다.")
@@ -1080,9 +1186,14 @@ def find_similar(
                 # compared, so validate both again before suggesting.
                 for entry in (first, second):
                     with _open_snapshot(entry) as stream:
+                        current = os.fstat(stream.fileno())
                         if (entry.path in content_tokens
-                                and os.fstat(stream.fileno()).st_ctime_ns != content_tokens[entry.path]):
+                                and current.st_ctime_ns != content_tokens[entry.path]):
                             raise OSError("File changed after its comparison features were read; rescan first")
+                        original = difference_hints.get(entry.path)
+                        if original is not None and any(
+                                value != original[key] for key, value in _snapshot_metadata(current).items()):
+                            raise OSError("File changed after its exact-analysis read; rescan first")
             except (OSError, ValueError, SyntaxError) as exc:
                 notice(f"Skipped pair {first.relative_path} / {second.relative_path}: {exc}", warning=True, skipped=True)
                 continue

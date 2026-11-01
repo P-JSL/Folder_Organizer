@@ -1,0 +1,110 @@
+{
+  "suite": "python-negative-read-hints-extended",
+  "baseline_commit": "c8155d2",
+  "input_files": 24,
+  "file_bytes": 131072,
+  "groups": 276,
+  "runs": [
+    {
+      "engine": "baseline",
+      "repeat": 1,
+      "elapsed_seconds": 0.0425130280200392,
+      "pairs": 276,
+      "byte_comparison_bytes": 72351744,
+      "groups": 276
+    },
+    {
+      "engine": "changed",
+      "repeat": 1,
+      "elapsed_seconds": 0.023644372005946934,
+      "pairs": 0,
+      "byte_comparison_bytes": 0,
+      "groups": 276
+    },
+    {
+      "engine": "changed",
+      "repeat": 2,
+      "elapsed_seconds": 0.022246318985708058,
+      "pairs": 0,
+      "byte_comparison_bytes": 0,
+      "groups": 276
+    },
+    {
+      "engine": "baseline",
+      "repeat": 2,
+      "elapsed_seconds": 0.042428960965480655,
+      "pairs": 276,
+      "byte_comparison_bytes": 72351744,
+      "groups": 276
+    },
+    {
+      "engine": "baseline",
+      "repeat": 3,
+      "elapsed_seconds": 0.04222467902582139,
+      "pairs": 276,
+      "byte_comparison_bytes": 72351744,
+      "groups": 276
+    },
+    {
+      "engine": "changed",
+      "repeat": 3,
+      "elapsed_seconds": 0.02149261103477329,
+      "pairs": 0,
+      "byte_comparison_bytes": 0,
+      "groups": 276
+    },
+    {
+      "engine": "changed",
+      "repeat": 4,
+      "elapsed_seconds": 0.021118681994266808,
+      "pairs": 0,
+      "byte_comparison_bytes": 0,
+      "groups": 276
+    },
+    {
+      "engine": "baseline",
+      "repeat": 4,
+      "elapsed_seconds": 0.04592595697613433,
+      "pairs": 276,
+      "byte_comparison_bytes": 72351744,
+      "groups": 276
+    },
+    {
+      "engine": "baseline",
+      "repeat": 5,
+      "elapsed_seconds": 0.04069685301510617,
+      "pairs": 276,
+      "byte_comparison_bytes": 72351744,
+      "groups": 276
+    },
+    {
+      "engine": "changed",
+      "repeat": 5,
+      "elapsed_seconds": 0.021087063010782003,
+      "pairs": 0,
+      "byte_comparison_bytes": 0,
+      "groups": 276
+    }
+  ],
+  "medians": {
+    "baseline": {
+      "elapsed_seconds": 0.042428960965480655,
+      "additional_byte_comparison_pairs": 276,
+      "additional_requested_comparison_bytes": 72351744
+    },
+    "changed": {
+      "elapsed_seconds": 0.02149261103477329,
+      "additional_byte_comparison_pairs": 0,
+      "additional_requested_comparison_bytes": 0
+    }
+  },
+  "baseline_source_sha256": "7bb2b5aac4876604eb434a29b9698409a45d635212632423012f86db6574bbf1",
+  "changed_source_sha256": "e630374d596262a5f48955c4903de058244d777db40f30b36414e53a2f934769",
+  "source_unchanged": true,
+  "scope": "same-size name-similar but byte-different synthetic files; scan and generation outside timing; exact and similarity included",
+  "limitations": [
+    "Linux local warm-cache synthetic fixture",
+    "not Windows, HDD, NAS, all content methods or end-to-end GUI performance",
+    "requested byte comparison reads are not physical storage I/O"
+  ]
+}
