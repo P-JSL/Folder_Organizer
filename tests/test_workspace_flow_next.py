@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import sys
 import time
+import traceback
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -56,7 +58,9 @@ def test_next_workspace_real_worker_analysis_to_keep_first_and_per_root_restore(
         assert workspace.keep_first_button.isEnabled()
 
         def forbidden(*_a, **_k):
-            pytest.fail("Keep-first restarted analysis, content hashing or a confirmation")
+            # AssertionError is retained by the real QThread worker. pytest's
+            # BaseException-based failure would escape its exception receipt.
+            raise AssertionError("Keep-first restarted analysis, content hashing or a confirmation")
 
         with monkeypatch.context() as guard:
             guard.setattr(workspace_actions, "scan_folders", forbidden)
@@ -64,7 +68,17 @@ def test_next_workspace_real_worker_analysis_to_keep_first_and_per_root_restore(
             guard.setattr(operations, "_fingerprint", forbidden)
             guard.setattr(QMessageBox, "question", forbidden)
             workspace.keep_first_button.click()
-            wait_until(app, lambda: not workspace.is_running())
+            try:
+                wait_until(app, lambda: not workspace.is_running())
+            except AssertionError as error:
+                worker = workspace._worker
+                state = {"status": workspace.status.text(), "running": worker.isRunning() if worker else False,
+                         "worker_error": getattr(worker, "error", None),
+                         "worker_result": repr(getattr(worker, "result", None)),
+                         "close_pending": workspace._close_pending,
+                         "consumed": workspace.session.consumed}
+                frames = "\n".join("".join(traceback.format_stack(frame)) for frame in sys._current_frames().values())
+                raise AssertionError(f"New worker state: {state}\n{frames}") from error
             assert workspace.last_receipt is not None, workspace.status.text()
         receipt = workspace.last_receipt
         assert receipt["status"] == "completed", receipt
