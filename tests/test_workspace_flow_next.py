@@ -10,8 +10,6 @@ import traceback
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import Qt
-from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from folder_organizer import matching, operations, workspace_actions
@@ -24,7 +22,10 @@ def wait_until(app, predicate):
         app.processEvents()
         if predicate():
             return
-        QTest.qWait(5)
+        # qWait can retain the GIL while Windows filesystem calls repeatedly
+        # release it, starving the real Python worker. Process GUI events, then
+        # explicitly yield Python execution without extending the deadline.
+        time.sleep(.005)
     assert predicate(), "New workspace worker did not complete"
 
 
