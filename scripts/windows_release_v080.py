@@ -195,6 +195,7 @@ def main() -> None:
         raise ValueError("Refusing to mix or overwrite prior Windows package evidence")
     record = {"schema": "folder-organizer.windows-release.v080", "version": VERSION,
               "status": "running", "source_commit": os.environ.get("GITHUB_SHA"),
+              "validation_source_commit": os.environ.get("GITHUB_SHA"),
               "started_at": datetime.now(timezone.utc).isoformat(), "program_sha256": {},
               "gui": {}, "previously_passed_checks": "skipped; no full old suites or old packaging fixtures"}
     save(receipt, record)

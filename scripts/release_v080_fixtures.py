@@ -27,7 +27,15 @@ def file_receipt(path: Path) -> dict[str, Any]:
 
 
 def _ordinary(path: str | Path) -> str:
-    value = os.path.abspath(os.fspath(path)).replace("/", "\\") if os.name == "nt" else os.path.abspath(path)
+    absolute = Path(os.path.abspath(os.fspath(path)))
+    # The runner TEMP environment can contain a DOS 8.3 parent (RUNNER~1),
+    # while the application reports the same directory's canonical long name.
+    # Resolve the parent, including the existing prefix of an offline path,
+    # but retain the final file name: hardlink aliases are distinct inventory
+    # paths and must not be collapsed through an opened file handle.
+    value = str(absolute.parent.resolve(strict=False) / absolute.name)
+    if os.name == "nt":
+        value = value.replace("/", "\\")
     if os.name == "nt":
         if value.startswith("\\\\?\\UNC\\"):
             value = "\\\\" + value[8:]
@@ -198,7 +206,7 @@ def _normalize(value: dict, fixture: Fixture, roots: list[Path], minimum: int,
             raise ValueError("Per-root inventory, requested scope or failure state differs from fixture truth")
         actual_path = _ordinary(observed["path"]) if observed["path"] is not None else None
         if actual_path != (expected["path"] if expected["valid"] else None):
-            raise ValueError("Canonical root identity differs")
+            raise ValueError(f"Canonical root identity differs: expected={expected['path']!r}; actual={actual_path!r}")
         if ((expected["valid"] and (observed["warnings"] or observed["error"] is not None))
                 or (not expected["valid"] and not observed["error"])):
             raise ValueError("Per-root warning/error details do not explain the completion state")

@@ -233,7 +233,9 @@ fn native_exclusive_handle_partial_then_hash_cancel_preserve_both_real_sources()
     );
     let cancel = AtomicBool::new(false);
     let on_progress = |event: multiroot::MultiProgress| {
-        if event.phase == "duplicates_hash" && event.completed == 0 {
+        // The shared kernel reports each completed hash as "duplicates";
+        // stop before the second file can finish and publish an exact group.
+        if event.root_id.is_empty() && event.phase == "duplicates" && event.completed == 1 {
             cancel.store(true, Ordering::Relaxed);
         }
     };

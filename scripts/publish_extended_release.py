@@ -13,6 +13,9 @@ import subprocess
 import zipfile
 
 from archive_review_release import ROOT, digest
+from reuse_extended_release import (
+    BUILD_RUN, BUILD_SOURCE, FAILED_CASE, PASSED_CASES, verify_reused_source,
+)
 
 REPOSITORY = "P-JSL/Folder_Organizer"
 VERSION = "0.8.0"
@@ -44,6 +47,8 @@ def read_json(path: Path) -> dict:
 def verify_sources(compiled: str, publication: str) -> list[str]:
     if not all(re.fullmatch(r"[0-9a-f]{40}", value) for value in (compiled, publication)):
         raise ValueError("A full immutable source commit is required")
+    if compiled == BUILD_SOURCE and compiled != publication:
+        return verify_reused_source(compiled, publication)
     subprocess.run(["git", "merge-base", "--is-ancestor", compiled, publication], cwd=ROOT, check=True)
     changes = [name for name in run("git", "diff", "--name-only", "--no-renames", "-z",
                                     compiled, publication).split("\0") if name]
@@ -54,20 +59,59 @@ def verify_sources(compiled: str, publication: str) -> list[str]:
 
 
 def verify_gates(manifest: dict, run_id: str) -> dict:
-    if not run_id.isdigit() or str(manifest.get("workflow_run")) != run_id:
-        raise ValueError("Artifact source and selected workflow run differ")
+    if not run_id.isdigit():
+        raise ValueError("An immutable validation run is required")
     source = manifest["source_commit"]
+    build_run = str(manifest.get("workflow_run"))
     execution = api(f"repos/{REPOSITORY}/actions/runs/{run_id}")
+    validation = execution.get("head_sha", "")
     if (execution.get("repository", {}).get("full_name") != REPOSITORY
-            or execution.get("head_sha") != source or execution.get("path") != WORKFLOW
+            or execution.get("path") != WORKFLOW
             or execution.get("event") != "workflow_dispatch"):
         raise ValueError("Artifact workflow identity differs from the formal source")
+    verify_sources(source, validation)
+    publication = run("git", "rev-parse", "HEAD")
+    subprocess.run(["git", "merge-base", "--is-ancestor", validation, publication], cwd=ROOT, check=True)
+    changed_after_review = {name for name in run("git", "diff", "--name-only", "--no-renames", "-z",
+                                                validation, publication).split("\0") if name}
+    if not changed_after_review <= PUBLICATION_ONLY_PATHS:
+        raise ValueError("Validation tools changed after their successful Windows execution")
     response = api(f"repos/{REPOSITORY}/actions/runs/{run_id}/jobs?filter=latest&per_page=100")
     jobs = response["jobs"]
     if response.get("total_count") != len(jobs):
         raise ValueError("The formal gate job inventory is incomplete")
-    gates = {}
-    for name in ("Formal Windows builds", "New Windows contracts", "New frozen feature checks"):
+    gates = {"compiled_source": source, "build_run": build_run, "validation_source": validation,
+             "validation_run": run_id, "reused_native_cases": []}
+    names = ["New Windows contracts", "New frozen feature checks"]
+    if build_run == run_id:
+        names.append("Formal Windows builds")
+    else:
+        if source != BUILD_SOURCE or build_run != BUILD_RUN:
+            raise ValueError("Only the known successful formal build may be reused")
+        names.append("Reuse exact build and passed native cases")
+        proof = read_json(ROOT / "native-results/BUILD_REUSE_V080.json")
+        if (proof.get("schema") != "folder-organizer.build-reuse.v080" or proof.get("status") != "passed"
+                or proof.get("build_run") != BUILD_RUN or proof.get("compiled_source") != source
+                or proof.get("validation_source") != validation
+                or proof.get("reused_native_cases") != list(PASSED_CASES)
+                or proof.get("required_native_case") != FAILED_CASE):
+            raise ValueError("Passed native cases and unchanged-build proof differ")
+        original = api(f"repos/{REPOSITORY}/actions/runs/{build_run}")
+        if (original.get("head_sha") != source or original.get("path") != WORKFLOW
+                or original.get("repository", {}).get("full_name") != REPOSITORY):
+            raise ValueError("Original formal build identity differs")
+        previous = api(f"repos/{REPOSITORY}/actions/runs/{build_run}/jobs?filter=latest&per_page=100")
+        if previous.get("total_count") != len(previous["jobs"]):
+            raise ValueError("Original build gate list is incomplete")
+        for name, conclusion, key in (("Formal Windows builds", "success", "original_build_job"),
+                                       ("New Windows contracts", "failure", "original_native_job")):
+            matches = [job for job in previous["jobs"] if job.get("name") == name]
+            if (len(matches) != 1 or matches[0].get("status") != "completed"
+                    or matches[0].get("conclusion") != conclusion or matches[0]["id"] != proof.get(key)):
+                raise ValueError("Original build/native completion proof differs")
+            gates["original " + name] = {"job_id": matches[0]["id"], "conclusion": conclusion}
+        gates["reused_native_cases"] = list(PASSED_CASES)
+    for name in names:
         found = [job for job in jobs if job.get("name") == name]
         if len(found) != 1 or found[0].get("status") != "completed" or found[0].get("conclusion") != "success":
             raise ValueError("Required new gate did not pass: " + name)
@@ -75,20 +119,32 @@ def verify_gates(manifest: dict, run_id: str) -> dict:
     native = read_json(ROOT / "native-results/WINDOWS_NATIVE_V080.json")
     feature = read_json(ROOT / "review-results/WINDOWS_RELEASE_V080.json")
     for receipt in (native, feature):
-        if (receipt.get("version") != VERSION or receipt.get("source_commit") != source
+        if (receipt.get("version") != VERSION or receipt.get("source_commit") != validation
+                or receipt.get("build_source_commit", source) != source
                 or receipt.get("status") != "passed"):
             raise ValueError("New Windows evidence does not match the exact compiled source")
     if (native.get("schema") != "folder-organizer.native-windows.v080"
             or native.get("exit_code") != 0 or str(native.get("workflow_run")) != run_id):
         raise ValueError("The new native contract target did not complete successfully")
+    if build_run != run_id:
+        if (native.get("reused_native_cases") != list(PASSED_CASES)
+                or str(native.get("prior_native_run")) != build_run
+                or native.get("command", [])[-3:] != [FAILED_CASE, "--", "--exact"]
+                or feature.get("validation_source_commit") != validation):
+            raise ValueError("The failed native case was not isolated from the two passed cases")
     expected_programs = {name: checksum for package in manifest["packages"].values()
                          for name, checksum in package["program_sha256"].items()}
     if (feature.get("schema") != "folder-organizer.windows-release.v080"
             or feature.get("program_sha256") != expected_programs):
         raise ValueError("Frozen feature checks did not exercise the exact five release executables")
     for edition in ("Python", "Rust"):
-        if feature.get("gui", {}).get(edition, {}).get("exit_code") != 0:
+        gui = feature.get("gui", {}).get(edition, {})
+        if gui.get("exit_code") != 0:
             raise ValueError("The new frozen multi-folder window did not complete: " + edition)
+        capture = gui.get("capture", {})
+        path = ROOT / "review-results" / f"{edition}_MULTIROOT_GUI.png"
+        if not path.is_file() or capture.get("sha256") != digest(path):
+            raise ValueError("Actual new GUI capture is missing or differs: " + edition)
     return gates
 
 
@@ -174,7 +230,9 @@ def main() -> None:
                     archive_bytes(archive, f"{folder}/{path.relative_to(ROOT / folder).as_posix()}", path.read_bytes())
         archive_bytes(archive, "SOURCE_CHAIN.json", (json.dumps(chain, indent=2) + "\n").encode("utf-8"))
     body = (ROOT / "docs/RELEASE_NOTES_0.8.0.md").read_text(encoding="utf-8")
-    body += f"\n정식 빌드·새 Windows 검사 소스: `{source}`. 검사 실행: `{run_id}`. 게시 소스: `{publication}`.\n"
+    body += f"\n정식 빌드 소스: `{source}` · 빌드 실행: `{manifest['workflow_run']}`. 새 Windows 검사 소스: `{gates['validation_source']}` · 검사 실행: `{run_id}`. 게시 소스: `{publication}`.\n"
+    if str(manifest["workflow_run"]) != run_id:
+        body += "\n정식 ZIP은 그대로 재사용했습니다. 검사 콜백의 진행 단계명과 Windows 8.3 임시 경로 비교만 보정했으며, 통과한 Windows 검사 2건은 보존하고 실패한 1건과 남은 새 배포본 확인만 실행했습니다.\n"
     body += "\n기존에 통과한 확장 개선 검사 52건은 재실행하지 않았습니다. 이번 새 Windows 계약·실제 배포 CLI·다중 폴더 GUI와 화면 증거는 `VALIDATION_RESULTS.zip`에 보존합니다.\n"
     signing = manifest["authenticode"]
     body += f"\n실제 서명 모드: `{signing['mode']}` · 공인 신뢰 검증: `{str(signing['public_trust_verified']).lower()}`. 자체 서명은 공인 게시자 인증을 의미하지 않습니다.\n"
