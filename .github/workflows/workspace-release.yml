@@ -1,0 +1,183 @@
+name: Main workspace formal release
+run-name: v0.9.0 Python and Rust formal release · ${{ github.sha }}
+on:
+  workflow_dispatch:
+    inputs:
+      publish_run_id:
+        description: 'Publish completed 0.9 artifacts only; skip all builds and checks'
+        required: false
+        default: ''
+      publish_after_checks:
+        description: 'Publish after new workspace checks when an exact-source tag and draft already exist'
+        type: boolean
+        required: false
+        default: false
+permissions:
+  contents: read
+  actions: read
+jobs:
+  build:
+    name: Formal Windows builds
+    if: inputs.publish_run_id == ''
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install packaging dependencies
+        run: python -m pip install -e ".[bundle]"
+      - name: Install pinned Rust compiler
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - uses: actions/cache/restore@v4
+        id: rust_cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust-app/target
+          key: windows-rust-static-1.99.1-${{ hashFiles('rust-app/Cargo.lock', 'rust-app/Cargo.toml', '.cargo/config.toml') }}
+          restore-keys: windows-rust-static-1.99.1-
+      - name: Build Python formal distribution
+        run: python scripts/build_python_distribution.py
+      - name: Build Rust formal programs with static MSVC runtime
+        run: cargo +1.99.1 build --manifest-path rust-app/Cargo.toml --locked --target x86_64-pc-windows-msvc --release --features gui --bins
+      - name: Package Rust programs and notices
+        run: python scripts/package_rust.py --binaries rust-app/target/x86_64-pc-windows-msvc/release
+      - name: Apply configured executable signing before ZIP creation
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+          WINDOWS_SIGNING_REQUIRED: ${{ vars.WINDOWS_SIGNING_REQUIRED }}
+          WINDOWS_SIGNING_TRUST_MODE: ${{ vars.WINDOWS_SIGNING_TRUST_MODE }}
+          WINDOWS_SIGNING_TIMESTAMP_URL: ${{ vars.WINDOWS_SIGNING_TIMESTAMP_URL }}
+        run: |
+          $targets = @(
+            'dist/FolderOrganizer/FolderOrganizer.exe',
+            'dist/FolderOrganizer/FolderOrganizerUpdater.exe',
+            'dist/FolderOrganizerRust/FolderOrganizerRust.exe',
+            'dist/FolderOrganizerRust/FolderOrganizerRustCLI.exe',
+            'dist/FolderOrganizerRust/FolderOrganizerRustUpdater.exe'
+          )
+          ./scripts/sign_windows_artifacts.ps1 -Files $targets
+          $configured = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_PFX_BASE64)
+          $mode = if ($configured) { $env:WINDOWS_SIGNING_TRUST_MODE } else { 'unsigned' }
+          if ($configured -and [string]::IsNullOrWhiteSpace($mode)) { $mode = 'development' }
+          $signatures = @($targets | ForEach-Object {
+            $signature = Get-AuthenticodeSignature -LiteralPath $_
+            @{file=$_; status=[string]$signature.Status; certificate_present=($null -ne $signature.SignerCertificate)}
+          })
+          @{mode=$mode; public_trust_verified=($mode -eq 'public'); programs=$signatures} |
+            ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 dist/WINDOWS_SIGNING_STATUS.json
+      - name: Archive exact formal payloads
+        run: python scripts/archive_review_release.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FolderOrganizer-v090-build
+          retention-days: 14
+          compression-level: 0
+          path: release-build/*
+      - name: Preserve compiler cache
+        if: always() && steps.rust_cache.outputs.cache-primary-key != '' && steps.rust_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust-app/target
+          key: ${{ steps.rust_cache.outputs.cache-primary-key }}
+  workspace:
+    name: New main workspace Windows checks
+    if: inputs.publish_run_id == ''
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install screenshot image writer
+        run: python -m pip install Pillow==12.3.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: FolderOrganizer-v090-build
+          path: release-build
+      - name: Extract exact formal ZIPs without old checks
+        run: python scripts/extract_review_release.py
+      - name: Check and photograph only the new embedded main workspaces
+        run: python scripts/windows_workspace_v090.py
+      - name: Preserve new UI evidence on success or failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FolderOrganizer-v090-workspace
+          retention-days: 14
+          if-no-files-found: warn
+          path: workspace-results/*
+  publish:
+    name: Publish formal release
+    if: inputs.publish_run_id == '' && inputs.publish_after_checks
+    needs: [build, workspace]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PUBLISH_RUN_ID: ${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: FolderOrganizer-v090-build
+          path: release-build
+      - uses: actions/download-artifact@v4
+        with:
+          name: FolderOrganizer-v090-workspace
+          path: workspace-results
+      - name: Publish verified payloads into prepared draft
+        run: python scripts/publish_workspace_release.py
+  publish_completed:
+    name: Publish completed artifacts only
+    if: inputs.publish_run_id != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PUBLISH_RUN_ID: ${{ inputs.publish_run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: FolderOrganizer-v090-build
+          path: release-build
+          run-id: ${{ inputs.publish_run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: FolderOrganizer-v090-workspace
+          path: workspace-results
+          run-id: ${{ inputs.publish_run_id }}
+          github-token: ${{ github.token }}
+      - name: Publish completed gates without repeating them
+        run: python scripts/publish_workspace_release.py

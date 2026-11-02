@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
     QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSplitter, QTableView, QTabWidget,
-    QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QStackedWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from . import __version__
@@ -601,7 +601,7 @@ class PlanTableModel(QAbstractTableModel):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, *, read_only_settings=False):
         super().__init__()
         self.setWindowTitle(f"Folder Organizer · {__version__}")
         self.setMinimumSize(1100, 700)
@@ -633,6 +633,8 @@ class MainWindow(QMainWindow):
         self._analysis_cache = AnalysisCache()
         self._analysis_session = AnalysisSession()
         self._multi_root_dialog = None
+        self.workspace_mode = "global"
+        self._read_only_settings = read_only_settings
         self._history_dialog = None
         self._log_dialog = None
         self._help_dialog = None
@@ -696,12 +698,13 @@ class MainWindow(QMainWindow):
         bar = self.menuBar()
         bar.setNativeMenuBar(False)
         self.file_menu = bar.addMenu("파일")
-        self._menu_action(self.file_menu, "폴더 선택…", self.choose_folder, shortcut="Ctrl+O")
-        self._menu_action(self.file_menu, "여러 폴더 통합 분석…", self.show_multiroot, shortcut="Ctrl+Shift+O")
+        self._menu_action(self.file_menu, "검색 폴더 추가…", self.add_workspace_folders, shortcut="Ctrl+O")
+        self._menu_action(self.file_menu, "단일 폴더 정리…", self.choose_folder)
+        self._menu_action(self.file_menu, "메인 통합 분석", self.show_multiroot, shortcut="Ctrl+Shift+O")
         self.recent_menu = self.file_menu.addMenu("최근 폴더")
         self._refresh_recent_menu()
         self._work_controls.append(self.recent_menu.menuAction())
-        self.scan_button = self._menu_action(self.file_menu, "다시 분석", self.start_scan, shortcut="F5")
+        self.scan_button = self._menu_action(self.file_menu, "다시 분석", self._refresh_current_scope, shortcut="F5")
         self.file_menu.addSeparator()
         self._menu_action(self.file_menu, "표시된 파일 모두 체크", self.select_visible, shortcut="Ctrl+A")
         self._menu_action(self.file_menu, "전체 체크 해제", self.clear_selection, shortcut="Ctrl+Shift+A")
@@ -738,7 +741,7 @@ class MainWindow(QMainWindow):
 
         self.records_menu = bar.addMenu("기록")
         self._menu_action(self.records_menu, "실행 로그…", self.show_execution_logs, work=False)
-        self._menu_action(self.records_menu, "작업 기록 · 복원…", self.show_history)
+        self.history_action = self._menu_action(self.records_menu, "작업 기록 · 복원…", self.show_history)
         self.records_menu.addSeparator()
         self._menu_action(self.records_menu, "활동 · 진단 로그…", self.show_logs, work=False)
 
@@ -877,10 +880,46 @@ class MainWindow(QMainWindow):
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        shell = QHBoxLayout(central)
+        shell = QVBoxLayout(central)
         shell.setContentsMargins(0, 0, 0, 0)
         shell.setSpacing(0)
         self._build_header_menus()
+        scope_bar = QWidget()
+        scope_bar.setObjectName("header")
+        scope_layout = QHBoxLayout(scope_bar)
+        scope_layout.setContentsMargins(14, 5, 14, 5)
+        self.global_scope_button = QPushButton("통합 분석")
+        self.global_scope_button.setCheckable(True)
+        self.global_scope_button.clicked.connect(self.show_multiroot)
+        scope_layout.addWidget(self.global_scope_button)
+        self.single_scope_button = QPushButton("선택 폴더 정리")
+        self.single_scope_button.setCheckable(True)
+        self.single_scope_button.clicked.connect(self._return_to_single_scope)
+        scope_layout.addWidget(self.single_scope_button)
+        self.scope_mode_label = QLabel("체크한 폴더의 파일과 중복을 함께 확인합니다. 읽기 전용")
+        self.scope_mode_label.setObjectName("muted")
+        scope_layout.addWidget(self.scope_mode_label, 1)
+        shell.addWidget(scope_bar)
+        self._work_controls.extend((self.global_scope_button, self.single_scope_button))
+        self.workspace_stack = QStackedWidget()
+        shell.addWidget(self.workspace_stack, 1)
+        from .multiroot_view import MultiRootWorkspace
+        options = {key: self.analysis_options[key] for key in ("exclude_patterns", "min_size", "max_size")}
+        options.update(recursive=self.settings.value("analysis/recursive", True, type=bool),
+                       include_hidden=self.settings.value("analysis/hidden", False, type=bool))
+        self.workspace = MultiRootWorkspace(self, options)
+        self.workspace_stack.addWidget(self.workspace)
+        self.workspace.organize_requested.connect(self._open_workspace_folder)
+        self.workspace.analysis_started.connect(lambda: self.set_busy(True, cancellable=True))
+        self.workspace.analysis_finished.connect(self._workspace_finished)
+        self.workspace.paths_changed.connect(self._save_workspace_roots)
+        if not self._read_only_settings:
+            try:
+                saved_roots = json.loads(self.settings.value("navigation/workspaceRoots", "[]"))
+                if isinstance(saved_roots, list):
+                    self.workspace.add_paths([path for path in saved_roots[:64] if isinstance(path, str) and len(path) <= 4096 and "\0" not in path])
+            except (TypeError, ValueError):
+                pass
 
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -1120,13 +1159,66 @@ class MainWindow(QMainWindow):
         footer.addWidget(self.cancel_button)
         footer.addWidget(self.update_status)
         layout.addLayout(footer)
-        shell.addWidget(content, 1)
+        self.single_content = content
+        self.workspace_stack.addWidget(content)
+        self.workspace_stack.setCurrentWidget(self.workspace)
         self._work_controls.append(self.table)
         self._work_controls.extend((self.match_filter, self.match_tree, self.retention_rule))
         self._refresh_scope_label()
         self._refresh_action_hint()
+        self._refresh_scope_controls()
         self.views.currentChanged.connect(self._refresh_guidance)
         self.match_tree.currentItemChanged.connect(self._refresh_guidance)
+
+    def _save_workspace_roots(self):
+        if not self._read_only_settings:
+            self.settings.setValue("navigation/workspaceRoots", json.dumps(self.workspace.root_model.paths, ensure_ascii=False))
+
+    def _refresh_scope_controls(self):
+        if not hasattr(self, "workspace_stack"):
+            return
+        single = self.workspace_mode == "single"
+        self.global_scope_button.setChecked(not single)
+        self.single_scope_button.setChecked(single)
+        self.analysis_menu.setEnabled(single and not self._is_busy)
+        self.organize_menu.setEnabled(single and not self._is_busy)
+        self.history_action.setEnabled(single and not self._is_busy)
+        self.export_menu.setEnabled(single and not self._is_busy)
+        self.single_scope_button.setEnabled(not self._is_busy and bool(self.root))
+        self.scope_mode_label.setText("폴더 하나에서 검증한 결과로 정리·복원합니다." if single else
+                                      "체크한 폴더의 파일과 중복을 함께 확인합니다. 읽기 전용")
+
+    def _workspace_finished(self):
+        self.set_busy(False)
+        if self._close_requested:
+            QTimer.singleShot(0, self.close)
+        else:
+            self._resume_deferred_update()
+
+    def _refresh_current_scope(self):
+        if self.workspace_mode == "global":
+            self.workspace.start_analysis()
+        else:
+            self.start_scan()
+
+    def add_workspace_folders(self):
+        if self._is_busy or self._close_requested:
+            return
+        self.show_multiroot()
+        if self.workspace_mode == "global":
+            self.workspace._pick_folders()
+
+    def _return_to_single_scope(self):
+        if self.root and not self._is_busy:
+            self._open_workspace_folder(self.root)
+
+    def _open_workspace_folder(self, path):
+        if self._is_busy or self._close_requested or self.workspace.is_running():
+            return
+        self.workspace_mode = "single"
+        self.workspace_stack.setCurrentWidget(self.single_content)
+        self._refresh_scope_controls()
+        self._open_folder(path)
 
     def _hidden_selected_count(self, paths=None) -> int:
         if not hasattr(self, "proxy"):
@@ -1214,6 +1306,7 @@ class MainWindow(QMainWindow):
         self.overview_action.setEnabled(ready)
         for control in (self.preview_button, self.assume_duplicates_button):
             control.setEnabled(ready and bool(self.model.checked))
+        self._refresh_scope_controls()
 
     def _run_next_step(self):
         if self._is_busy:
@@ -1413,6 +1506,11 @@ class MainWindow(QMainWindow):
             self.status_label.setText("진행 중인 파일 처리가 끝나면 분석을 중단합니다…")
 
     def closeEvent(self, event):
+        if self.workspace.is_running():
+            self._close_requested = True
+            self.workspace.cancel_analysis()
+            event.ignore()
+            return
         if self._multi_root_dialog is not None and self._multi_root_dialog.is_running():
             self._close_requested = True
             if not getattr(self, "_multiroot_close_waiting", False):
@@ -1688,6 +1786,25 @@ class MainWindow(QMainWindow):
             self._open_folder(path)
 
     def show_multiroot(self):
+        # Retain the old opt-in release entry point without using it for 0.9.
+        if "--multiroot-smoke" in sys.argv:
+            return self.show_multiroot_dialog()
+        if self._is_busy or self._close_requested:
+            return
+        for dialog in (self._history_dialog, self._merge_dialog):
+            if dialog is not None and dialog.isVisible():
+                self.status_label.setText("현재 작업 창을 닫은 뒤 통합 분석으로 전환하세요.")
+                return
+        self.workspace_mode = "global"
+        self._clear_analysis_cache()
+        self.scan_result = None
+        self.scan_complete = False
+        self.model.set_entries([])
+        self._clear_match_results()
+        self.workspace_stack.setCurrentWidget(self.workspace)
+        self._refresh_scope_controls()
+
+    def show_multiroot_dialog(self):
         if self._is_busy or self._close_requested:
             return
         if self._multi_root_dialog is not None:
@@ -1709,9 +1826,12 @@ class MainWindow(QMainWindow):
         dialog.open()
 
     def _open_folder(self, path):
-        if self._is_busy or self._close_requested:
+        if self._is_busy or self._close_requested or self.workspace.is_running():
             return
         self._clear_analysis_cache()
+        self.workspace_mode = "single"
+        self.workspace_stack.setCurrentWidget(self.single_content)
+        self._refresh_scope_controls()
         self._remember_next_scan = True
         self.root = str(Path(path).expanduser().absolute())
         self.folder_input.setText(self.root)
@@ -1726,6 +1846,9 @@ class MainWindow(QMainWindow):
         self.start_scan()
 
     def start_scan(self):
+        if self.workspace_mode == "global":
+            self.workspace.start_analysis()
+            return
         if not self.root:
             self.choose_folder()
             return
@@ -1826,6 +1949,9 @@ class MainWindow(QMainWindow):
         self._refresh_action_hint()
 
     def _require_scan(self, selection=False) -> bool:
+        if self.workspace_mode != "single":
+            QMessageBox.information(self, "통합 분석은 읽기 전용", "왼쪽에서 폴더 하나를 선택한 뒤 ‘이 폴더에서 정리’를 누르세요. 해당 폴더를 별도로 분석한 결과로 정리합니다.")
+            return False
         if not self.scan_result or not self.scan_complete:
             QMessageBox.information(self, "폴더 분석 필요", "폴더를 선택하고 분석을 완료한 뒤 사용하세요.")
             return False
@@ -2512,6 +2638,9 @@ class MainWindow(QMainWindow):
         self.start_scan()
 
     def show_history(self):
+        if self.workspace_mode != "single":
+            QMessageBox.information(self, "폴더별 작업 기록", "왼쪽에서 폴더를 선택하고 ‘이 폴더에서 정리’로 전환한 뒤 기록을 확인하세요.")
+            return
         if self._history_dialog is not None and self._history_dialog.isVisible():
             self._history_dialog.raise_()
             self._history_dialog.activateWindow()
@@ -2730,6 +2859,9 @@ class MainWindow(QMainWindow):
 
 
 def launch() -> int:
+    if "--workspace-smoke" in sys.argv:
+        from .workspace_smoke import launch as launch_workspace_smoke
+        return launch_workspace_smoke()
     if "--multiroot-smoke" in sys.argv:
         from .multiroot_smoke import launch as launch_multiroot_smoke
         return launch_multiroot_smoke()

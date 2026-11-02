@@ -4,11 +4,11 @@ Windows에서 **내 컴퓨터의 폴더**를 선택해 파일을 살펴보고, �
 
 **이용 권한: 권리자 P-JSL 본인과 권리자가 명시적으로 서면 허락한 사람만 사용할 수 있습니다.** 공개 저장소·다운로드 가능 여부는 사용·상업적 이용·재배포 허락이 아닙니다. [LICENSE](LICENSE) · [이용약관](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/TERMS_OF_USE.md) · [개인정보·로컬 데이터 안내](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/PRIVACY.md) · [이용허락 요청](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/PERMISSION_REQUEST.md)을 확인하세요. ZIP에는 앱 폴더의 `LICENSE`와 `licenses/FolderOrganizer/`에 관련 문서가 포함됩니다. 제3자 라이선스와 기존 적법한 권리는 유지합니다.
 
-**v0.8.0은 여러 폴더를 함께 조회하고 완전 중복을 찾는 Python·Rust Windows 배포판입니다.** 비교 보고서를 코드와 대조해 반복 읽기·이름 특징 계산을 줄였으며, 기존 SHA-256·바이트 검증과 복원을 유지합니다. [보고서 항목별 검토](docs/EXTENDED_REPORT_REVIEW.md)에서 사실·수정·설계 제안의 근거를 구분합니다. 수정하지 않은 기능과 기존 통과 검사는 반복하지 않습니다. 정식 1.0.0의 [완료 기준](docs/V1_READINESS.md)과 두 판의 [지원 경계](docs/EDITIONS_0.6.0.md)도 유지합니다.
+**v0.9.0 소스는 Python·Rust의 메인 화면에서 여러 폴더를 함께 조회하고 완전 중복을 찾도록 구성합니다.** 왼쪽 폴더 목록, 가운데 파일·중복 결과, 오른쪽 파일 정보를 한 화면에 배치하고 분석 시작·취소를 상단에서 제공합니다. [새 메인 화면 사용 안내](docs/WORKSPACE_0.9.0.md)를 참고하세요. 기존 통과 검사와 미수정 기능 검사는 모두 스킵합니다.
 
-현재 안정판은 **v0.8.0**입니다. 중복 검사 결과를 재사용하는 즉시 정리, `delete_files` 보관, 복원 데이터 압축과 큰 목록의 조회·분석 개선을 포함합니다. 각 판의 자동 업데이트는 자기 판의 패키지만 확인합니다.
+v0.9.0 작업을 시작하기 전에 최신 릴리즈를 **v0.7.0**으로 먼저 되돌렸습니다. 원래 v0.8.0의 두 Windows ZIP·체크섬·검사 자료는 저장소의 [DOWNLOADS/v0.8.0](DOWNLOADS/v0.8.0/)에 보관했습니다. 설치된 v0.8.0을 자동으로 다운그레이드하지는 않습니다. 각 판의 자동 업데이트는 자기 판의 패키지만 확인합니다.
 
-v0.8.0에는 확장 보고서를 대조한 [여러 폴더 읽기 전용 통합 분석](docs/MULTIROOT_ANALYSIS.md)과 반복 읽기·특징 계산 개선을 추가했습니다. **파일 → 여러 폴더 통합 분석…**에서 사용하며, [검토 판단](docs/EXTENDED_REPORT_REVIEW.md)에 확인된 사실과 새 설계 제안을 구분했습니다. 단일 폴더의 정리·복원 기록은 유지합니다.
+v0.9.0은 v0.8.0의 [여러 폴더 읽기 전용 통합 분석](docs/MULTIROOT_ANALYSIS.md)과 반복 읽기·특징 계산 개선을 이어 사용합니다. 통합 결과에서는 파일을 변경하지 않으며 **이 폴더에서 정리**로 실제 폴더 하나를 선택해 기존 정리·복원 기능을 사용합니다. [보고서 검토 판단](docs/EXTENDED_REPORT_REVIEW.md), 정식 1.0.0의 [완료 기준](docs/V1_READINESS.md)과 두 판의 [지원 경계](docs/EDITIONS_0.6.0.md)를 유지합니다.
 
 [v0.8.0 실제 배포 결과·Windows 화면](docs/RELEASE_RESULTS_0.8.0.md)에 두 ZIP, 새 검사와 기존 검사 재사용 범위를 기록했습니다.
 
@@ -24,7 +24,7 @@ v0.8.0에는 확장 보고서를 대조한 [여러 폴더 읽기 전용 통합 �
 
 1. [Python판 Windows ZIP](https://github.com/P-JSL/Folder_Organizer/releases/latest/download/FolderOrganizer-Windows-x64.zip) 또는 [Rust판 Windows ZIP](https://github.com/P-JSL/Folder_Organizer/releases/latest/download/FolderOrganizer-Rust-Windows-x64.zip)을 다운로드합니다. 버전별 변경 사항과 체크섬은 [Releases](https://github.com/P-JSL/Folder_Organizer/releases)에서 확인할 수 있습니다.
 2. ZIP 전체를 압축 해제한 뒤 Python은 `FolderOrganizer/FolderOrganizer.exe`, Rust는 `FolderOrganizerRust/FolderOrganizerRust.exe`를 실행합니다. 각 ZIP의 도우미·라이선스 파일과 Python의 `_internal` 폴더도 함께 보관해야 합니다.
-3. **폴더 선택 → 분석**으로 시작합니다. 우선 작은 테스트 폴더에서 미리보기와 되돌리기를 확인하세요.
+3. **폴더 추가 → 검사 시작**으로 여러 폴더를 함께 분석합니다. 파일을 정리하려면 폴더 목록에서 하나를 골라 **이 폴더에서 정리**로 이동하세요.
 
 Windows 배포판은 Windows 10/11 x64를 대상으로 하며 **Python 설치가 필요 없습니다**. 소스 실행에는 Python 3.11 이상이 필요합니다. 실행 파일은 코드 서명되지 않아 Windows에서 게시자 확인 알림을 표시할 수 있습니다. 개발용 자체 서명 인증서 생성 및 GitHub Actions의 선택적 코드 서명 방법은 [Windows 코드 서명 안내](docs/WINDOWS_CODE_SIGNING.md)를 참고하세요. 자체 서명은 Windows의 공인 게시자 인증이나 SmartScreen 경고를 제거하지 않습니다. Windows·Linux CI에서 검증하며 실행 파일은 Windows 러너에서 빌드합니다. macOS는 소스 실행 구조를 갖추었지만 별도 패키지나 실기기 검증을 제공하지 않습니다.
 

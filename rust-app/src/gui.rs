@@ -34,7 +34,7 @@ const HELP: &[(&str, &str)] = &[
     ("복원 데이터 최적화", "완료 작업을 선택해 별도로 요청하면 실제 보관 데이터를 1 MiB 조각 중복 제거·무손실 압축으로 줄입니다. 검증과 기록을 마친 뒤 사본을 줄이며, 효과가 없으면 원본 저장을 유지합니다. 메타데이터만으로 잃어버린 원문을 만들 수 없습니다."),
     ("손상 검사와 새 복구본", "지원 ZIP·Office ZIP·이미지·PDF에서 읽을 수 있는 내용만 새 파일로 보존합니다. 원본을 고치거나 디스크 삭제 영역을 되살리지 않습니다. 암호화·해석 한도·부분 복구의 경고를 확인하세요."),
     ("검사 범위와 속도", "목록 탐색과 요약은 항목을 한 번씩 방문합니다. 정렬과 실제 바이트 검증 비용은 별도입니다. 큰 유사 비교는 제한된 후보를 사용하므로 일부 쌍을 놓칠 수 있습니다. 취소·권한 오류·부분 검사 경고를 확인하세요."),
-    ("여러 폴더 통합 분석", "파일 메뉴에서 여러 폴더를 등록한 뒤 전체 또는 체크한 폴더를 함께 분석합니다. 서로 다른 폴더의 완전 중복도 실제 바이트로 확인합니다. 이 창은 읽기 전용이며 삭제·이동 버튼과 연결되지 않습니다. 중첩 경로·부분 실패·취소 안내를 확인하세요. 자동 감시는 실행하지 않습니다."),
+    ("여러 폴더 통합 분석", "메인 화면에서 여러 폴더를 등록하고 체크한 폴더를 함께 분석합니다. 서로 다른 폴더의 완전 중복도 실제 바이트로 확인합니다. 통합 결과는 읽기 전용입니다. 정리는 목록에서 폴더 하나를 선택하고 ‘이 폴더에서 정리’를 누르세요. 중첩 경로·부분 실패·취소 안내를 확인하세요."),
     ("자동 업데이트", "Rust 배포판은 Rust ZIP·체크섬·버전 표식을 확인합니다. Python 배포판과 섞어 설치하지 않습니다. 업데이트는 파일 작업을 마친 뒤 앱이 종료된 후 별도 도우미가 적용합니다. 소스 실행에서는 지원하지 않습니다."),
 ];
 
@@ -262,6 +262,7 @@ enum MultiDuplicateRow {
 // Explicit release-validation mode. It drives the normal read-only window and
 // worker, waits for the external native screenshot, and never starts an update.
 struct MultiRootSmoke {
+    workspace: bool,
     roots: Vec<PathBuf>,
     options: ScanOptions,
     report: PathBuf,
@@ -274,21 +275,27 @@ struct MultiRootSmoke {
 
 impl MultiRootSmoke {
     fn requested() -> AppResult<Option<Self>> {
-        if !std::env::args().any(|argument| argument == "--multiroot-smoke") {
+        let workspace = std::env::args().any(|argument| argument == "--workspace-smoke");
+        if !workspace && !std::env::args().any(|argument| argument == "--multiroot-smoke") {
             return Ok(None);
         }
-        let encoded = std::env::var("FOLDER_ORGANIZER_MULTI_SMOKE_ROOTS")
+        let prefix = if workspace {
+            "FOLDER_ORGANIZER_WORKSPACE_SMOKE"
+        } else {
+            "FOLDER_ORGANIZER_MULTI_SMOKE"
+        };
+        let encoded = std::env::var(format!("{prefix}_ROOTS"))
             .map_err(|_| "Multi-root smoke roots are not configured".to_owned())?;
         let roots: Vec<PathBuf> =
             serde_json::from_str(&encoded).map_err(|error| error.to_string())?;
         if roots.is_empty() || roots.len() > 64 || roots.iter().any(|root| !root.is_absolute()) {
             return Err("Multi-root smoke requires 1–64 absolute fixture folders".into());
         }
-        let report = std::env::var_os("FOLDER_ORGANIZER_MULTI_SMOKE_REPORT")
+        let report = std::env::var_os(format!("{prefix}_REPORT"))
             .map(PathBuf::from)
             .filter(|path| path.is_absolute())
             .ok_or("Multi-root smoke requires an absolute external report path")?;
-        let exclude_patterns = match std::env::var("FOLDER_ORGANIZER_MULTI_SMOKE_EXCLUDES") {
+        let exclude_patterns = match std::env::var(format!("{prefix}_EXCLUDES")) {
             Ok(encoded) => {
                 serde_json::from_str::<Vec<String>>(&encoded).map_err(|error| error.to_string())?
             }
@@ -298,6 +305,7 @@ impl MultiRootSmoke {
         let mut marker = report.as_os_str().to_os_string();
         marker.push(".capture-done");
         Ok(Some(Self {
+            workspace,
             roots,
             options: ScanOptions {
                 exclude_patterns,
@@ -383,16 +391,26 @@ pub struct OrganizerApp {
     multi_show_files: bool,
     multi_warnings: Vec<String>,
     multi_warning_total: usize,
+    workspace_root: Option<usize>,
+    workspace_file: Option<usize>,
+    workspace_index: HashMap<PathBuf, usize>,
+    workspace_groups: HashMap<PathBuf, usize>,
+    workspace_rows: Vec<RowCache>,
+    workspace_visible: Vec<usize>,
+    workspace_query: String,
 }
 
 impl OrganizerApp {
     pub fn new(context: &eframe::CreationContext<'_>) -> Self {
         install_fonts(&context.egui_ctx);
-        let settings = load_settings();
+        let mut settings = load_settings();
         let multi_smoke = MultiRootSmoke::requested().unwrap_or_else(|error| {
             eprintln!("Multi-root GUI smoke configuration failed: {error}");
             std::process::exit(1);
         });
+        if multi_smoke.as_ref().is_some_and(|smoke| smoke.workspace) {
+            settings.dark = true;
+        }
         let smoke_frames = (multi_smoke.is_none()
             && (std::env::args().any(|arg| arg == "--gui-smoke")
                 || std::env::var("FOLDER_ORGANIZER_RUST_SMOKE").is_ok_and(|value| value == "1")))
@@ -429,7 +447,7 @@ impl OrganizerApp {
             similar: None,
             view: View::Files,
             groups_actionable: false,
-            status: "폴더를 선택하면 파일을 읽기 전용으로 분석합니다.".into(),
+            status: "폴더를 추가하고 체크한 뒤 분석 시작을 누르세요.".into(),
             error: None,
             notices: VecDeque::new(),
             receiver: None,
@@ -468,16 +486,23 @@ impl OrganizerApp {
             quit_requested: false,
             smoke_frames,
             multi_smoke,
-            multi_open: false,
+            multi_open: true,
             multi_folders,
             multi_result: None,
             multi_progress: BTreeMap::new(),
             multi_root_labels: BTreeMap::new(),
             multi_rows: vec![],
             multi_workers: 2,
-            multi_show_files: false,
+            multi_show_files: true,
             multi_warnings: vec![],
             multi_warning_total: 0,
+            workspace_root: None,
+            workspace_file: None,
+            workspace_index: HashMap::new(),
+            workspace_groups: HashMap::new(),
+            workspace_rows: vec![],
+            workspace_visible: vec![],
+            workspace_query: String::new(),
         }
     }
     fn note(&mut self, message: impl Into<String>) {
@@ -631,6 +656,7 @@ impl OrganizerApp {
                         .collect();
                 self.multi_result = Some(Arc::new(report));
                 self.multi_open = true;
+                self.rebuild_workspace_rows();
             }
             ResultData::Scan(scan, options) => {
                 self.scan_options = options;
@@ -916,6 +942,11 @@ impl OrganizerApp {
         }
     }
     fn start_scan(&mut self, context: &egui::Context, root: PathBuf) {
+        if self.busy.is_some() {
+            return;
+        }
+        self.clear_single_authority();
+        self.multi_open = false;
         let options = self.settings.scan.clone();
         self.root = Some(root.clone());
         self.start(context, "폴더 분석", move |cancel, progress| {
@@ -927,6 +958,12 @@ impl OrganizerApp {
         if self.busy.is_some() || roots.is_empty() {
             return;
         }
+        self.enter_workspace();
+        self.workspace_file = None;
+        self.workspace_rows.clear();
+        self.workspace_visible.clear();
+        self.workspace_index.clear();
+        self.workspace_groups.clear();
         self.multi_result = None;
         self.multi_rows.clear();
         self.multi_warnings.clear();
@@ -947,6 +984,134 @@ impl OrganizerApp {
                     .map(ResultData::Multi)
             },
         );
+    }
+    // Global reports never inherit single-root write authority. Keeping this
+    // transition explicit also closes previews prepared for an earlier root.
+    fn clear_single_authority(&mut self) {
+        self.root = None;
+        self.scan = None;
+        self.rows.clear();
+        self.index.clear();
+        self.visible.clear();
+        self.selected.clear();
+        self.selected_bytes = 0;
+        self.selection_bytes_dirty = true;
+        self.groups_actionable = false;
+        self.duplicates.clear();
+        self.duplicate_rows.clear();
+        self.duplicate_details = None;
+        self.similar = None;
+        self.plan = None;
+        self.merge = None;
+        self.rules_open = false;
+        self.history_open = false;
+        self.history_selected = None;
+        self.compaction_request = None;
+        self.health = None;
+        self.comparison = None;
+        self.overview = None;
+        self.compaction_result = None;
+        self.logs_open = false;
+    }
+    fn enter_workspace(&mut self) {
+        if self.busy.is_some() {
+            return;
+        }
+        self.clear_single_authority();
+        self.multi_open = true;
+        self.status = "통합 분석 · 읽기 전용 · 체크한 폴더를 함께 분석합니다.".into();
+    }
+    fn rebuild_workspace_rows(&mut self) {
+        self.workspace_rows.clear();
+        self.workspace_index.clear();
+        self.workspace_groups.clear();
+        if let Some(report) = &self.multi_result {
+            for (index, group) in report.duplicates.groups.iter().enumerate() {
+                for path in &group.paths {
+                    self.workspace_groups.insert(path.clone(), index);
+                }
+            }
+            for (index, file) in report.files.iter().enumerate() {
+                self.workspace_index.insert(file.path.clone(), index);
+                self.workspace_rows.push(RowCache {
+                    search: file.path.to_string_lossy().to_lowercase(),
+                    modified: file
+                        .modified_ns
+                        .parse::<i128>()
+                        .ok()
+                        .map(date_text)
+                        .unwrap_or_else(|| "확인 불가".into()),
+                    created: file
+                        .created_ns
+                        .as_deref()
+                        .and_then(|value| value.parse::<i128>().ok())
+                        .map(date_text)
+                        .unwrap_or_else(|| "제공되지 않음".into()),
+                    size: bytes_text(file.size),
+                });
+            }
+        }
+        self.filter_workspace_rows();
+        self.workspace_file = self.workspace_visible.first().copied();
+    }
+    fn filter_workspace_rows(&mut self) {
+        let query = self.workspace_query.trim().to_lowercase();
+        self.workspace_visible = self
+            .workspace_rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| query.is_empty() || row.search.contains(&query))
+            .map(|(index, _)| index)
+            .collect();
+    }
+    fn add_workspace_folders(&mut self) {
+        if self.busy.is_some() {
+            return;
+        }
+        if let Some(paths) = rfd::FileDialog::new()
+            .set_title("분석할 폴더 추가 · 여러 개 선택 가능")
+            .pick_folders()
+        {
+            let mut changed = false;
+            for path in paths {
+                if !self.multi_folders.iter().any(|folder| folder.path == path) {
+                    if self.multi_folders.len() >= 64 {
+                        self.note("최대 64개 폴더까지 등록할 수 있습니다.");
+                        break;
+                    }
+                    self.multi_folders.push(MultiFolderInput {
+                        path,
+                        selected: true,
+                    });
+                    self.workspace_root = Some(self.multi_folders.len() - 1);
+                    changed = true;
+                }
+            }
+            if changed {
+                self.workspace_folders_changed();
+            }
+        }
+    }
+    fn workspace_folders_changed(&mut self) {
+        self.multi_result = None;
+        self.multi_rows.clear();
+        self.multi_warnings.clear();
+        self.multi_warning_total = 0;
+        self.multi_progress.clear();
+        self.workspace_file = None;
+        self.workspace_index.clear();
+        self.workspace_groups.clear();
+        self.workspace_rows.clear();
+        self.workspace_visible.clear();
+        self.settings.multi_roots = self
+            .multi_folders
+            .iter()
+            .map(|folder| folder.path.clone())
+            .collect();
+        if self.multi_smoke.is_none() {
+            save_settings(&self.settings);
+        }
+        self.status = "폴더 선택이 바뀌었습니다. 분석 시작으로 현재 범위를 확인하세요.".into();
     }
     fn advance_multiroot_smoke(&mut self, context: &egui::Context) {
         let Some(smoke) = self.multi_smoke.as_ref() else {
@@ -991,7 +1156,50 @@ impl OrganizerApp {
         // Presented frames precede the ready file, so the driver can capture
         // actual final results rather than a startup or loading canvas.
         if smoke.ready_at.is_none() && smoke.result_frames >= 8 {
-            if let Err(error) = reporting::export_multiroot_json(report.as_ref(), &smoke.report) {
+            let saved = if smoke.workspace {
+                let selected = self
+                    .workspace_file
+                    .and_then(|index| report.files.get(index))
+                    .map(|file| {
+                        serde_json::json!({
+                            "name": folder_display_name(&file.path),
+                            "path": file.path,
+                            "size": file.size,
+                            "kind": file.kind,
+                            "modified_ns": file.modified_ns,
+                            "created_ns": file.created_ns,
+                        })
+                    });
+                let value = serde_json::json!({
+                    "schema": "folder-organizer-workspace-smoke-v1",
+                    "app_version": VERSION,
+                    "edition": "rust",
+                    "main_workspace": self.multi_open,
+                    "scope_mode": "global",
+                    "checked_roots": self.multi_folders.iter().filter(|folder| folder.selected).map(|folder| &folder.path).collect::<Vec<_>>(),
+                    "file_rows": report.files.len(),
+                    "duplicate_groups": report.duplicates.groups.len(),
+                    "action_authority": self.groups_actionable || report.action_authority || self.scan.is_some(),
+                    "finished": report.complete && !report.cancelled,
+                    "selected_snapshot": selected,
+                    "layout": ["search_paths", "results", "file_properties"],
+                    "theme": if self.settings.dark { "dark" } else { "light" },
+                });
+                (|| -> AppResult<()> {
+                    let bytes =
+                        serde_json::to_vec_pretty(&value).map_err(|error| error.to_string())?;
+                    let mut file = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&smoke.report)
+                        .map_err(|error| error.to_string())?;
+                    file.write_all(&bytes).map_err(|error| error.to_string())?;
+                    file.sync_all().map_err(|error| error.to_string())
+                })()
+            } else {
+                reporting::export_multiroot_json(report.as_ref(), &smoke.report)
+            };
+            if let Err(error) = saved {
                 eprintln!("Multi-root GUI smoke report failed: {error}");
                 std::process::exit(1);
             }
@@ -1040,6 +1248,13 @@ impl OrganizerApp {
             .unwrap_or_default()
     }
     fn require_checked(&mut self, minimum: usize) -> Option<Vec<PathBuf>> {
+        if self.multi_open {
+            self.error = Some(
+                "통합 분석은 읽기 전용입니다. 폴더를 선택하고 ‘이 폴더에서 정리’를 누르세요."
+                    .into(),
+            );
+            return None;
+        }
         let paths = self.checked_paths();
         if paths.len() < minimum {
             self.error = Some(format!(
@@ -1094,7 +1309,7 @@ impl OrganizerApp {
         });
     }
     fn keep_first(&mut self, context: &egui::Context) {
-        if !self.groups_actionable || self.duplicates.is_empty() {
+        if self.multi_open || !self.groups_actionable || self.duplicates.is_empty() {
             return;
         }
         let Some(scan) = self.scan.clone() else {
@@ -1452,14 +1667,22 @@ impl OrganizerApp {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("파일", |ui| {
                     if ui
-                        .add_enabled(self.busy.is_none(), egui::Button::new("폴더 선택…"))
+                        .add_enabled(self.busy.is_none(), egui::Button::new("한 폴더에서 정리…"))
                         .clicked()
                     {
                         ui.close_menu();
                         self.pick_folder(context);
                     }
-                    if ui.button("여러 폴더 통합 분석…").clicked() {
-                        self.multi_open = true;
+                    if ui
+                        .add_enabled(
+                            self.busy.is_none(),
+                            egui::Button::new("여러 폴더 통합 분석"),
+                        )
+                        .clicked()
+                    {
+                        if self.busy.is_none() {
+                            self.enter_workspace();
+                        }
                         ui.close_menu();
                     }
                     ui.menu_button("최근 폴더", |ui| {
@@ -1485,7 +1708,7 @@ impl OrganizerApp {
                         ] {
                             if ui
                                 .add_enabled(
-                                    self.scan.is_some() && self.busy.is_none(),
+                                    !self.multi_open && self.scan.is_some() && self.busy.is_none(),
                                     egui::Button::new(label),
                                 )
                                 .clicked()
@@ -1502,7 +1725,7 @@ impl OrganizerApp {
                     }
                 });
                 ui.menu_button("검사", |ui| {
-                    let available = self.scan.is_some() && self.busy.is_none();
+                    let available = !self.multi_open && self.scan.is_some() && self.busy.is_none();
                     if ui
                         .add_enabled(
                             self.root.is_some() && self.busy.is_none(),
@@ -1543,7 +1766,7 @@ impl OrganizerApp {
                     }
                 });
                 ui.menu_button("정리", |ui| {
-                    let available = self.scan.is_some() && self.busy.is_none();
+                    let available = !self.multi_open && self.scan.is_some() && self.busy.is_none();
                     if ui
                         .add_enabled(
                             available && self.groups_actionable && !self.duplicates.is_empty(),
@@ -1775,6 +1998,10 @@ impl OrganizerApp {
         });
     }
     fn workspace(&mut self, context: &egui::Context) {
+        if self.multi_open {
+            self.multiroot_workspace(context);
+            return;
+        }
         egui::CentralPanel::default().show(context, |ui| {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -1786,6 +2013,7 @@ impl OrganizerApp {
                     if ui.add_enabled(self.busy.is_none(), egui::Button::new(if self.root.is_some() { "폴더 변경…" } else { "폴더 선택…" }).fill(ACCENT).min_size(egui::vec2(110.0, 34.0))).clicked() { self.pick_folder(context); }
                 });
             });
+            if ui.add_enabled(self.busy.is_none(), egui::Button::new("← 여러 폴더 통합 분석으로")).clicked() { self.enter_workspace(); }
             ui.add_space(14.0);
             if self.scan.is_none() {
                 ui.add_space(45.0); ui.vertical_centered(|ui| {
@@ -2204,6 +2432,10 @@ impl OrganizerApp {
         }
     }
     fn plan_dialog(&mut self, context: &egui::Context) {
+        if self.multi_open {
+            self.plan = None;
+            return;
+        }
         let Some(plan) = &self.plan else {
             return;
         };
@@ -2228,6 +2460,10 @@ impl OrganizerApp {
         }
     }
     fn merge_dialog(&mut self, context: &egui::Context) {
+        if self.multi_open {
+            self.merge = None;
+            return;
+        }
         let Some(preview) = &self.merge else {
             return;
         };
@@ -2545,190 +2781,277 @@ impl OrganizerApp {
             });
         self.help_open = open;
     }
-    fn multiroot_dialog(&mut self, context: &egui::Context) {
-        let mut open = self.multi_open;
+    fn multiroot_workspace(&mut self, context: &egui::Context) {
         let available = self.busy.is_none();
-        let running = self
-            .busy
-            .as_ref()
-            .is_some_and(|busy| busy.name == "여러 폴더 통합 분석");
-        let (mut add, mut remove, mut scan_all, mut scan_selected, mut export) =
-            (false, false, false, false, false);
-        egui::Window::new("여러 폴더 통합 분석 · 읽기 전용")
-            .open(&mut open).default_size(egui::vec2(1000.0, 760.0)).show(context, |ui| {
-                ui.label("여러 폴더의 파일을 함께 살펴보고, 폴더 사이의 완전 중복을 찾습니다.");
-                ui.label(RichText::new("이 창에서는 파일을 삭제하거나 이동하지 않습니다. 자동 감시는 실행하지 않습니다.").color(ACCENT));
-                ui.horizontal_wrapped(|ui| {
-                    add = ui.add_enabled(available, egui::Button::new("폴더 추가…")).clicked();
-                    let selected = self.multi_folders.iter().any(|folder| folder.selected);
-                    remove = ui.add_enabled(available && selected, egui::Button::new("체크한 폴더 제거")).clicked();
-                    scan_selected = ui.add_enabled(available && selected, egui::Button::new("체크한 폴더 분석")).clicked();
-                    scan_all = ui.add_enabled(available && !self.multi_folders.is_empty(), egui::Button::new("전체 폴더 분석").fill(ACCENT)).clicked();
-                    if running && ui.button("분석 취소 요청").clicked() {
-                        if let Some(busy) = &self.busy { busy.cancel.store(true, Ordering::Relaxed); }
+        let mut folders_changed = false;
+        let mut organize = None;
+        egui::TopBottomPanel::top("workspace-actions").show(context, |ui| {
+            ui.add_space(5.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(available, egui::Button::new("폴더 추가…"))
+                    .clicked()
+                {
+                    self.add_workspace_folders();
+                }
+                let selected = self
+                    .multi_folders
+                    .iter()
+                    .filter(|folder| folder.selected)
+                    .count();
+                if ui
+                    .add_enabled(
+                        available && selected > 0,
+                        egui::Button::new("분석 시작").fill(ACCENT),
+                    )
+                    .clicked()
+                {
+                    let roots = self
+                        .multi_folders
+                        .iter()
+                        .filter(|folder| folder.selected)
+                        .map(|folder| folder.path.clone())
+                        .collect();
+                    self.start_multiroot(context, roots);
+                }
+                if ui
+                    .add_enabled(!available, egui::Button::new("중지"))
+                    .clicked()
+                {
+                    if let Some(busy) = &self.busy {
+                        busy.cancel.store(true, Ordering::Relaxed);
                     }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("최대 동시 탐색");
-                    ui.add_enabled(available, egui::DragValue::new(&mut self.multi_workers).range(1..=4));
-                    ui.label("같은 장치·서버는 순서대로 읽습니다. 전체 해시는 순차 처리합니다.");
-                });
-                ui.label("현재 ‘검사 범위 · 보존 설정’의 하위 폴더·숨김·제외·크기 조건을 적용합니다.");
-                if self.multi_folders.is_empty() {
-                    ui.label("‘폴더 추가’에서 분석할 폴더를 하나 이상 등록하세요.");
-                } else {
-                    egui::ScrollArea::vertical().id_salt("multi-inputs").max_height(150.0)
-                        .show_rows(ui, 26.0, self.multi_folders.len(), |ui, range| {
-                            for index in range {
-                                let folder = &mut self.multi_folders[index];
-                                ui.add_enabled(available, egui::Checkbox::new(&mut folder.selected, folder.path.display().to_string()));
-                            }
-                        });
                 }
-                if running {
-                    ui.separator();
-                    ui.horizontal(|ui| { ui.spinner(); ui.strong("읽기 전용 분석 중"); });
-                    egui::ScrollArea::vertical().id_salt("multi-live").max_height(130.0)
-                        .show(ui, |ui| {
-                            for (root_id, progress) in &self.multi_progress {
-                                let label = self.multi_root_labels.get(root_id).map(String::as_str)
-                                    .unwrap_or("선택 폴더 전체 · 중복 분석");
-                                ui.label(label);
-                                ui.label(format!("{} · {}{} · {}", multi_phase_label(&progress.phase), progress.completed,
-                                    progress.total.map(|total| format!(" / {total}")).unwrap_or_default(), progress.message));
-                            }
-                        });
-                }
-                let Some(report) = &self.multi_result else { return; };
                 ui.separator();
-                ui.heading(format!("파일 {}개 · 완전 중복 {}그룹", report.files.len(), report.duplicates.groups.len()));
-                if report.complete {
-                    ui.label(format!("선택 범위 분석 완료 · 경과 {:.2}초", report.timings.elapsed_seconds));
-                } else {
-                    ui.colored_label(ACCENT, if report.cancelled {
-                        "취소된 부분 결과입니다. 전체 선택 범위의 중복 없음 판정이 아닙니다."
-                    } else {
-                        "일부 폴더·파일을 확인하지 못했습니다. 아래 상태와 경고를 확인하세요."
-                    });
-                }
-                egui::CollapsingHeader::new("폴더별 결과와 검사 범위").default_open(true).show(ui, |ui| {
-                    egui::ScrollArea::vertical().id_salt("multi-root-results").max_height(160.0)
-                        .show_rows(ui, 46.0, report.roots.len(), |ui, range| {
-                            for index in range {
-                                let root = &report.roots[index];
-                                ui.add(egui::Label::new(root.requested_path.display().to_string()).truncate())
-                                    .on_hover_text(root.requested_path.display().to_string());
-                                ui.label(format!("{} · 파일 {}개 · {} · {:.2}초 · 경고 {}개", multi_state_label(&root.state),
-                                    root.file_count, bytes_text(root.bytes), root.elapsed_seconds,
-                                    root.warnings.len() + usize::from(root.error.is_some())));
-                            }
-                        });
+                ui.label(
+                    RichText::new("통합 분석 · 읽기 전용")
+                        .color(ACCENT)
+                        .strong(),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_enabled(
+                            available && self.multi_result.is_some(),
+                            egui::Button::new("보고서 저장…"),
+                        )
+                        .clicked()
+                    {
+                        self.export_multiroot(context);
+                    }
+                    ui.label(format!(
+                        "체크 {selected} / 등록 {}개",
+                        self.multi_folders.len()
+                    ));
                 });
-                if self.multi_warning_total > 0 {
-                    egui::CollapsingHeader::new(format!("범위·분석 안내 {}건", self.multi_warning_total)).show(ui, |ui| {
-                        if self.multi_warning_total > self.multi_warnings.len() {
-                            ui.label("화면에는 처음 1,000건까지 표시합니다. 전체 내용은 JSON 보고서에서 확인하세요.");
-                        }
-                        egui::ScrollArea::vertical().id_salt("multi-warnings").max_height(130.0)
-                            .show_rows(ui, 24.0, self.multi_warnings.len(), |ui, range| {
-                                for index in range {
-                                    ui.add(egui::Label::new(&self.multi_warnings[index]).truncate())
-                                        .on_hover_text(&self.multi_warnings[index]);
-                                }
-                            });
-                    });
+            });
+            ui.add_space(5.0);
+        });
+        egui::SidePanel::left("workspace-search-paths").resizable(true).default_width(246.0).width_range(210.0..=380.0).show(context, |ui| {
+            ui.add_space(8.0);
+            ui.heading("분석할 폴더");
+            ui.label(RichText::new("체크한 폴더를 함께 비교합니다").small().weak());
+            ui.horizontal(|ui| {
+                if ui.add_enabled(available && !self.multi_folders.is_empty(), egui::Button::new("전체 체크")).clicked() {
+                    for folder in &mut self.multi_folders { folders_changed |= !folder.selected; folder.selected = true; }
                 }
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.multi_show_files, false, "완전 중복 그룹");
-                    ui.selectable_value(&mut self.multi_show_files, true, "통합 파일 목록");
-                    export = ui.add_enabled(available, egui::Button::new("JSON 보고서 저장…")).clicked();
-                });
-                ui.label("중복은 전체 SHA-256·실제 바이트·파일 변경 여부를 확인한 결과입니다. 첫 파일이 가장 좋은 원본이라는 뜻은 아닙니다.");
-                if self.multi_show_files {
-                    TableBuilder::new(ui).id_salt("multi-file-table").striped(true)
-                        .column(Column::remainder()).column(Column::initial(100.0))
-                        .column(Column::initial(150.0)).column(Column::initial(150.0))
-                        .max_scroll_height(300.0)
-                        .header(26.0, |mut header| {
-                            for title in ["파일 경로", "크기", "수정일", "생성일"] { header.col(|ui| { ui.strong(title); }); }
-                        }).body(|body| {
-                            body.rows(26.0, report.files.len(), |mut row| {
-                                let file = &report.files[row.index()];
-                                row.col(|ui| { ui.add(egui::Label::new(file.path.display().to_string()).truncate())
-                                    .on_hover_text(file.path.display().to_string()); });
-                                row.col(|ui| { ui.label(bytes_text(file.size)); });
-                                row.col(|ui| { ui.label(file.modified_ns.parse::<i128>().ok().map(date_text).unwrap_or_else(|| "확인 불가".into())); });
-                                row.col(|ui| { ui.label(file.created_ns.as_deref().and_then(|value| value.parse::<i128>().ok()).map(date_text).unwrap_or_else(|| "제공되지 않음".into())); });
-                            });
-                        });
-                } else if self.multi_rows.is_empty() {
-                    ui.label(if report.complete { "선택 범위에서 완전 중복을 찾지 못했습니다." } else { "확인된 완전 중복 그룹이 없습니다. 미완료 범위는 위 안내를 확인하세요." });
-                } else {
-                    egui::ScrollArea::vertical().id_salt("multi-duplicate-table").max_height(300.0)
-                        .show_rows(ui, 28.0, self.multi_rows.len(), |ui, range| {
-                            for index in range {
-                                match self.multi_rows[index] {
-                                    MultiDuplicateRow::Header(group_index) => {
-                                        let group = &report.duplicates.groups[group_index];
-                                        ui.strong(format!("그룹 {} · {}개 파일 · 파일당 {} · {}개 선택 폴더", group_index + 1, group.paths.len(), bytes_text(group.size), group.group_source_count));
-                                    }
-                                    MultiDuplicateRow::File(group_index, file_index) => {
-                                        let path = &report.duplicates.groups[group_index].paths[file_index];
-                                        ui.add(egui::Label::new(format!("    {}", path.display())).truncate())
-                                            .on_hover_text(path.display().to_string());
-                                    }
-                                }
-                            }
-                        });
+                if ui.add_enabled(available && self.workspace_root.is_some(), egui::Button::new("목록에서 제거")).clicked() {
+                    if let Some(index) = self.workspace_root.take() {
+                        if index < self.multi_folders.len() { self.multi_folders.remove(index); folders_changed = true; }
+                    }
                 }
             });
-        self.multi_open = open;
-        if add {
-            if let Some(paths) = rfd::FileDialog::new()
-                .set_title("통합 분석할 폴더 추가 · 여러 개 선택 가능")
-                .pick_folders()
-            {
-                for path in paths {
-                    if !self.multi_folders.iter().any(|folder| folder.path == path) {
-                        if self.multi_folders.len() >= 64 {
-                            self.note("통합 분석은 최대 64개 폴더까지 등록할 수 있습니다.");
-                            break;
-                        }
-                        self.multi_folders.push(MultiFolderInput {
-                            path,
-                            selected: true,
-                        });
+            ui.separator();
+            if self.multi_folders.is_empty() {
+                ui.add_space(18.0);
+                ui.label("폴더 추가에서 내 PC·NAS의 폴더를 등록하세요.");
+                ui.label(RichText::new("원본 파일을 바꾸지 않고 분석합니다.").weak());
+            }
+            egui::ScrollArea::vertical().id_salt("workspace-root-list").max_height((ui.available_height() * 0.55).max(120.0)).show(ui, |ui| {
+                for (index, folder) in self.multi_folders.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        folders_changed |= ui.add_enabled(available, egui::Checkbox::without_text(&mut folder.selected)).changed();
+                        let name = folder_display_name(&folder.path);
+                        let response = ui.add(egui::Button::new(name).selected(self.workspace_root == Some(index)).truncate());
+                        if response.clicked() { self.workspace_root = Some(index); }
+                        response.on_hover_text(folder.path.display().to_string());
+                    });
+                    if let Some(root) = self.multi_result.as_ref().and_then(|report| report.roots.iter().find(|root| root.requested_path == folder.path)) {
+                        ui.label(RichText::new(format!("{} · {}개", multi_state_label(&root.state), root.file_count)).small().weak());
                     }
                 }
-                self.multi_result = None;
-                self.multi_rows.clear();
+            });
+            ui.separator();
+            let root = self.workspace_root.and_then(|index| self.multi_folders.get(index));
+            if let Some(root) = root {
+                ui.label(RichText::new("선택한 폴더").small().weak());
+                ui.add(egui::Label::new(root.path.display().to_string()).wrap());
             }
+            if ui.add_enabled(available && root.is_some(), egui::Button::new("이 폴더에서 정리")).on_hover_text("선택 폴더 한 곳을 별도로 분석한 뒤 기존 삭제·이동·분류 기능을 사용합니다.").clicked() {
+                organize = root.map(|folder| folder.path.clone());
+            }
+            ui.add_space(8.0);
+            egui::CollapsingHeader::new("분석 범위와 속도").show(ui, |ui| {
+                let mut changed = false;
+                changed |= ui.add_enabled(available, egui::Checkbox::new(&mut self.settings.scan.recursive, "하위 폴더 포함")).changed();
+                changed |= ui.add_enabled(available, egui::Checkbox::new(&mut self.settings.scan.include_hidden, "숨김 파일 포함")).changed();
+                ui.horizontal(|ui| {
+                    ui.label("동시 탐색");
+                    ui.add_enabled(available, egui::DragValue::new(&mut self.multi_workers).range(1..=4));
+                });
+                ui.label(RichText::new("같은 장치·NAS 서버는 순서대로 읽습니다.").small().weak());
+                if ui.button("제외·크기 조건 설정…").clicked() { self.settings_open = true; }
+                if changed { folders_changed = true; }
+            });
+            ui.add_space(8.0);
+            ui.label(RichText::new("완전 중복은 내용이 같은 파일입니다. 유사 파일 비교·분류·복원은 ‘이 폴더에서 정리’로 들어가세요.").small().weak());
+        });
+        if folders_changed {
+            self.workspace_folders_changed();
         }
-        if remove {
-            self.multi_folders.retain(|folder| !folder.selected);
-            self.multi_result = None;
-            self.multi_rows.clear();
+        if let Some(path) = organize {
+            self.start_scan(context, path);
+            // The panels for the new scope are presented on the next frame.
+            egui::CentralPanel::default().show(context, |ui| {
+                ui.heading("선택한 폴더를 분석하고 있습니다…");
+            });
+            return;
         }
-        if add || remove {
-            self.settings.multi_roots = self
-                .multi_folders
-                .iter()
-                .map(|folder| folder.path.clone())
-                .collect();
-            save_settings(&self.settings);
-        }
-        if scan_all || scan_selected {
-            let roots = self
-                .multi_folders
-                .iter()
-                .filter(|folder| scan_all || folder.selected)
-                .map(|folder| folder.path.clone())
-                .collect();
-            self.start_multiroot(context, roots);
-        }
-        if export {
-            self.export_multiroot(context);
-        }
+        self.workspace_properties(context);
+        egui::CentralPanel::default().show(context, |ui| {
+            ui.add_space(8.0);
+            let Some(report) = self.multi_result.clone() else {
+                if let Some(busy) = &self.busy {
+                    ui.horizontal(|ui| { ui.spinner(); ui.heading("폴더를 분석하고 있습니다"); });
+                    ui.label(format!("원본을 유지하며 파일 목록과 완전 중복을 확인합니다 · {:.1}초", busy.started.elapsed().as_secs_f32()));
+                    egui::ScrollArea::vertical().id_salt("workspace-live-progress").show(ui, |ui| {
+                        for (root_id, progress) in &self.multi_progress {
+                            ui.separator();
+                            ui.label(self.multi_root_labels.get(root_id).map(String::as_str).unwrap_or("폴더 사이 완전 중복 확인"));
+                            ui.label(format!("{} · {}개", multi_phase_label(&progress.phase), progress.completed));
+                        }
+                    });
+                } else {
+                    ui.heading("여러 폴더를 한눈에 비교하세요");
+                    ui.add_space(12.0);
+                    for (step, title, description) in [
+                        ("1", "폴더 추가", "왼쪽 목록에 비교할 폴더를 등록하고 체크하세요."),
+                        ("2", "분석 시작", "파일 용량·날짜와 폴더 사이의 완전 중복을 확인합니다."),
+                        ("3", "파일 확인", "결과를 선택하면 오른쪽에 파일 정보가 표시됩니다."),
+                    ] {
+                        ui.group(|ui| { ui.horizontal(|ui| { ui.label(RichText::new(step).color(ACCENT).size(22.0)); ui.vertical(|ui| { ui.strong(title); ui.label(description); }); }); });
+                        ui.add_space(8.0);
+                    }
+                    ui.label(RichText::new("파일 정리가 필요하면 왼쪽에서 폴더를 선택하고 ‘이 폴더에서 정리’를 누르세요.").weak());
+                }
+                return;
+            };
+            ui.horizontal(|ui| {
+                ui.heading("분석 결과");
+                ui.label(format!("{}개 파일 · {}그룹", report.files.len(), report.duplicates.groups.len()));
+            });
+            ui.label(RichText::new(if report.complete { format!("선택 범위 분석 완료 · {:.2}초", report.timings.elapsed_seconds) } else if report.cancelled { "중지된 부분 결과 · 전체 범위의 중복 없음 판정이 아닙니다".into() } else { "일부 폴더·파일을 확인하지 못했습니다 · 아래 분석 안내를 확인하세요".into() }).color(if report.complete { ui.visuals().weak_text_color() } else { ACCENT }));
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.multi_show_files, true, "전체 파일");
+                ui.selectable_value(&mut self.multi_show_files, false, "완전 중복");
+            });
+            if self.multi_show_files {
+                ui.horizontal(|ui| {
+                    ui.label("찾기");
+                    if ui.add(egui::TextEdit::singleline(&mut self.workspace_query).hint_text("파일 이름 또는 경로").desired_width(f32::INFINITY)).changed() { self.filter_workspace_rows(); }
+                });
+                ui.label(RichText::new(format!("표시 {} / 전체 {}개 · 결과 선택은 삭제 대상 선택이 아닙니다", self.workspace_visible.len(), report.files.len())).small().weak());
+                let table_height = (ui.available_height() - 85.0).max(120.0);
+                TableBuilder::new(ui).id_salt("workspace-file-table").striped(true).resizable(true)
+                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                    .column(Column::remainder().at_least(120.0)).column(Column::initial(85.0))
+                    .column(Column::initial(130.0)).column(Column::initial(130.0))
+                    .max_scroll_height(table_height)
+                    .header(28.0, |mut header| {
+                        for title in ["파일 이름", "용량", "수정일", "생성일"] { header.col(|ui| { ui.strong(title); }); }
+                    }).body(|body| {
+                        body.rows(28.0, self.workspace_visible.len(), |mut row| {
+                            let index = self.workspace_visible[row.index()];
+                            let file = &report.files[index];
+                            let cache = &self.workspace_rows[index];
+                            row.set_selected(self.workspace_file == Some(index));
+                            row.col(|ui| {
+                                if ui.add(egui::Button::new(folder_display_name(&file.path)).selected(self.workspace_file == Some(index)).truncate()).on_hover_text(file.path.display().to_string()).clicked() { self.workspace_file = Some(index); }
+                            });
+                            row.col(|ui| { ui.label(&cache.size); });
+                            row.col(|ui| { ui.label(&cache.modified); });
+                            row.col(|ui| { ui.label(&cache.created); });
+                            if row.response().clicked() { self.workspace_file = Some(index); }
+                        });
+                    });
+            } else {
+                ui.label(RichText::new("전체 SHA-256·실제 바이트·변경 여부 확인 · 첫 파일이 더 좋은 원본이라는 뜻은 아닙니다").small().weak());
+                if self.multi_rows.is_empty() {
+                    ui.add_space(16.0);
+                    ui.label(if report.complete { "선택 범위에서 완전 중복을 찾지 못했습니다." } else { "확인된 완전 중복 그룹이 없습니다. 미완료 범위를 확인하세요." });
+                }
+                egui::ScrollArea::vertical().id_salt("workspace-duplicate-table").max_height((ui.available_height() - 85.0).max(120.0)).show_rows(ui, 30.0, self.multi_rows.len(), |ui, range| {
+                    for index in range {
+                        match self.multi_rows[index] {
+                            MultiDuplicateRow::Header(group_index) => {
+                                let group = &report.duplicates.groups[group_index];
+                                ui.label(RichText::new(format!("그룹 {} · {}개 · 파일당 {}", group_index + 1, group.paths.len(), bytes_text(group.size))).strong().color(ACCENT));
+                            }
+                            MultiDuplicateRow::File(group_index, file_index) => {
+                                let path = &report.duplicates.groups[group_index].paths[file_index];
+                                let index = self.workspace_index.get(path).copied();
+                                if ui.add(egui::Button::new(format!("{}   {}", file_index + 1, path.display())).selected(self.workspace_file == index && index.is_some()).truncate()).on_hover_text(path.display().to_string()).clicked() { self.workspace_file = index; }
+                            }
+                        }
+                    }
+                });
+            }
+            ui.separator();
+            if self.multi_warning_total > 0 {
+                egui::CollapsingHeader::new(format!("분석 안내 {}건", self.multi_warning_total)).show(ui, |ui| {
+                    egui::ScrollArea::vertical().id_salt("workspace-warnings").max_height(100.0).show_rows(ui, 24.0, self.multi_warnings.len(), |ui, range| {
+                        for index in range { ui.add(egui::Label::new(&self.multi_warnings[index]).truncate()).on_hover_text(&self.multi_warnings[index]); }
+                    });
+                    if self.multi_warning_total > self.multi_warnings.len() { ui.small("처음 1,000건 표시 · 전체 안내는 보고서에 저장됩니다"); }
+                });
+            } else {
+                ui.label(RichText::new("통합 결과는 읽기 전용입니다 · 정리는 선택한 폴더 한 곳에서 실행합니다").small().weak());
+            }
+        });
+    }
+    fn workspace_properties(&self, context: &egui::Context) {
+        egui::SidePanel::right("workspace-file-properties").resizable(true).default_width(260.0).width_range(220.0..=420.0).show(context, |ui| {
+            ui.add_space(8.0);
+            ui.heading("파일 정보");
+            ui.separator();
+            let Some(report) = &self.multi_result else { ui.label("분석 후 결과에서 파일을 선택하세요."); return; };
+            let Some(index) = self.workspace_file else { ui.label("결과에서 파일을 선택하세요."); return; };
+            let Some(file) = report.files.get(index) else { return; };
+            let cache = &self.workspace_rows[index];
+            egui::ScrollArea::vertical().id_salt("workspace-properties-scroll").show(ui, |ui| {
+                ui.label(RichText::new(folder_display_name(&file.path)).strong().size(17.0));
+                for (label, value) in [
+                    ("전체 경로", file.path.display().to_string()),
+                    ("용량", format!("{} · {} 바이트", cache.size, file.size)),
+                    ("수정일", cache.modified.clone()),
+                    ("생성일", cache.created.clone()),
+                    ("종류", format!("{} · {}", file.kind, if file.extension.is_empty() { "확장자 없음" } else { &file.extension })),
+                ] {
+                    ui.add_space(9.0); ui.label(RichText::new(label).small().weak());
+                    ui.add(egui::Label::new(value).wrap().selectable(true));
+                }
+                ui.add_space(9.0); ui.label(RichText::new("포함된 분석 폴더").small().weak());
+                for root in report.roots.iter().filter(|root| file.root_ids.contains(&root.root_id)) {
+                    ui.add(egui::Label::new(root.requested_path.display().to_string()).wrap());
+                }
+                if let Some(group) = self.workspace_groups.get(&file.path).and_then(|index| report.duplicates.groups.get(*index)) {
+                    ui.separator(); ui.strong(format!("완전 중복 · {}개 파일", group.paths.len()));
+                    ui.small("SHA-256"); ui.add(egui::Label::new(&group.sha256).wrap().selectable(true));
+                    ui.label("파일 내용과 실제 바이트가 같습니다. 이름·날짜는 다를 수 있습니다.");
+                }
+                ui.add_space(12.0); ui.separator();
+                ui.label(RichText::new("분석 시점의 정보입니다. 이 화면은 파일을 추가로 읽거나 변경하지 않습니다.").small().weak());
+            });
+        });
     }
     fn overview_dialog(&mut self, context: &egui::Context) {
         let Some(overview) = &self.overview else {
@@ -2814,9 +3137,6 @@ impl OrganizerApp {
         }
     }
     fn dialogs(&mut self, context: &egui::Context) {
-        if self.multi_open {
-            self.multiroot_dialog(context);
-        }
         if self.settings_open {
             self.settings_dialog(context);
         }
@@ -2863,6 +3183,13 @@ impl OrganizerApp {
             }
         }
     }
+}
+
+fn folder_display_name(path: &Path) -> String {
+    path.file_name()
+        .filter(|name| !name.is_empty())
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 fn multi_state_label(state: &str) -> &str {
@@ -3010,6 +3337,11 @@ fn compare_file(
 }
 
 fn apply_theme(context: &egui::Context, dark: bool) {
+    context.set_theme(if dark {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    });
     context.set_visuals(if dark {
         egui::Visuals::dark()
     } else {
@@ -3193,4 +3525,194 @@ pub fn run() -> eframe::Result<()> {
         options,
         Box::new(|context| Ok(Box::new(OrganizerApp::new(context)))),
     )
+}
+
+#[cfg(test)]
+mod v090_workspace_tests {
+    use super::*;
+
+    fn app() -> (OrganizerApp, egui::Context) {
+        let context = egui::Context::default();
+        let mut app = OrganizerApp::new(&eframe::CreationContext::_new_kittest(context.clone()));
+        app.settings = Settings::default();
+        app.settings.automatic_updates = false;
+        app.multi_folders.clear();
+        apply_theme(&context, true);
+        (app, context)
+    }
+    fn snapshot_report() -> multiroot::MultiAnalysis {
+        let files = [
+            "/snapshot-only/자료/report.txt",
+            "/snapshot-only/백업/report.txt",
+        ]
+        .iter()
+        .map(|path| multiroot::MultiFile {
+            path: PathBuf::from(path),
+            root_ids: vec!["root-1".into()],
+            owner_root_id: "root-1".into(),
+            relative_paths: BTreeMap::new(),
+            size: 42,
+            kind: "file".into(),
+            extension: ".txt".into(),
+            modified_ns: "1730000000000000000".into(),
+            created_ns: None,
+        })
+        .collect::<Vec<_>>();
+        multiroot::MultiAnalysis {
+            schema: "fixture-v090-ui".into(),
+            app_version: VERSION.into(),
+            action_authority: false,
+            complete: true,
+            inventory_complete: true,
+            cancelled: false,
+            roots: vec![],
+            notes: vec![],
+            duplicate_inputs: vec![],
+            duplicates: multiroot::MultiDuplicates {
+                requested: true,
+                complete: Some(true),
+                cancelled: false,
+                warnings: vec![],
+                warning_count: 0,
+                warnings_truncated: false,
+                metrics: Default::default(),
+                groups: vec![multiroot::ReadOnlyGroup {
+                    paths: files.iter().map(|file| file.path.clone()).collect(),
+                    size: 42,
+                    sha256: "abc123".into(),
+                    root_ids: vec!["root-1".into()],
+                    group_source_count: 1,
+                    action_authority: false,
+                }],
+            },
+            files,
+            timings: multiroot::Timings {
+                elapsed_seconds: 0.1,
+                scan_seconds: 0.05,
+                duplicate_seconds: 0.05,
+            },
+            scheduling: multiroot::Scheduling {
+                max_workers: 2,
+                policy: "fixture".into(),
+            },
+        }
+    }
+    fn draw(app: &mut OrganizerApp, context: &egui::Context) -> String {
+        let output = context.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1250.0, 820.0),
+                )),
+                ..Default::default()
+            },
+            |context| {
+                app.header(context);
+                app.footer(context);
+                app.workspace(context);
+                app.dialogs(context);
+            },
+        );
+        fn collect(shape: &egui::epaint::Shape, text: &mut String) {
+            match shape {
+                egui::epaint::Shape::Text(shape) => {
+                    text.push_str(shape.galley.text());
+                    text.push('\n');
+                }
+                egui::epaint::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, text);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut text = String::new();
+        for shape in output.shapes {
+            collect(&shape.shape, &mut text);
+        }
+        text
+    }
+    #[test]
+    fn default_main_workspace_embeds_search_results_and_properties_in_dark_mode() {
+        let (mut app, context) = app();
+        assert!(app.multi_open);
+        let text = draw(&mut app, &context);
+        for title in [
+            "분석할 폴더",
+            "파일 정보",
+            "여러 폴더를 한눈에 비교하세요",
+            "분석 시작",
+            "통합 분석 · 읽기 전용",
+        ] {
+            assert!(
+                text.contains(title),
+                "main workspace is missing {title}: {text}"
+            );
+        }
+        assert_eq!(
+            context.options(|options| options.theme_preference),
+            egui::ThemePreference::Dark
+        );
+        assert!(app.scan.is_none());
+        assert!(app.require_checked(1).is_none());
+    }
+    #[test]
+    fn main_scope_route_clears_single_root_authority_and_pending_selection() {
+        let (mut app, _) = app();
+        app.multi_open = false;
+        app.root = Some(PathBuf::from("/previous-folder"));
+        app.scan = Some(Arc::new(ScanResult {
+            root: app.root.clone().unwrap(),
+            files: vec![],
+            warnings: vec![],
+            cancelled: false,
+            metrics: Default::default(),
+        }));
+        app.groups_actionable = true;
+        app.selected
+            .insert(PathBuf::from("/previous-folder/old.txt"));
+        app.rules_open = true;
+        app.history_open = true;
+        app.enter_workspace();
+        assert!(app.multi_open);
+        assert!(app.root.is_none() && app.scan.is_none() && app.selected.is_empty());
+        assert!(!app.groups_actionable && !app.rules_open && !app.history_open);
+        assert!(app.require_checked(1).is_none());
+    }
+    #[test]
+    fn busy_single_root_job_cannot_switch_into_global_workspace() {
+        let (mut app, _) = app();
+        app.multi_open = false;
+        app.root = Some(PathBuf::from("/active-folder"));
+        app.busy = Some(Busy {
+            name: "fixture-only".into(),
+            started: Instant::now(),
+            cancel: Arc::new(AtomicBool::new(false)),
+        });
+        app.enter_workspace();
+        assert!(!app.multi_open);
+        assert_eq!(app.root, Some(PathBuf::from("/active-folder")));
+    }
+    #[test]
+    fn snapshot_only_inspector_and_cached_filter_render_without_reopening_files() {
+        let (mut app, context) = app();
+        app.finish(ResultData::Multi(snapshot_report()));
+        assert_eq!(app.workspace_index.len(), 2);
+        assert_eq!(app.workspace_groups.len(), 2);
+        assert_eq!(app.workspace_file, Some(0));
+        let text = draw(&mut app, &context);
+        assert!(text.contains("report.txt") && text.contains("42 바이트"));
+        assert!(text.contains("abc123"));
+        assert!(text.contains("제공되지 않음"));
+        app.workspace_query = "백업".into();
+        app.filter_workspace_rows();
+        assert_eq!(app.workspace_visible, vec![1]);
+        let mut partial = snapshot_report();
+        partial.complete = false;
+        partial.cancelled = true;
+        app.finish(ResultData::Multi(partial));
+        assert!(draw(&mut app, &context).contains("중지된 부분 결과"));
+        assert!(!app.groups_actionable && app.scan.is_none());
+    }
 }
