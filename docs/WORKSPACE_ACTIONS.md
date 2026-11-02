@@ -48,4 +48,4 @@
 
 ## 확인·배포 범위
 
-기존에 통과한 검사와 미수정 기능 검사는 모두 스킵합니다. 새 통합 작업·화면 연결에 필요한 사례만 확인하며 화면 캡처는 진행하지 않습니다. 공개 릴리즈·원본 다운로드의 상태는 [Releases](https://github.com/P-JSL/Folder_Organizer/releases)와 [DOWNLOADS](../DOWNLOADS/README.md)에서 확인하세요.
+기존에 통과한 검사와 미수정 기능 검사는 모두 스킵합니다. 새 통합 작업·화면 연결 사례 45건의 로컬·Windows 확인과 실패 항목만 재확인한 범위는 [실제 확인 결과](WORKSPACE_ACTION_RESULTS.md)에 기록했습니다. 화면 캡처는 진행하지 않았습니다. 공개 릴리즈·원본 다운로드의 상태는 [Releases](https://github.com/P-JSL/Folder_Organizer/releases)와 [DOWNLOADS](../DOWNLOADS/README.md)에서 확인하세요.
