@@ -1,0 +1,26 @@
+{
+  "version": "0.9.0",
+  "purpose": "original release archive before latest-version rollback",
+  "release_id": 431102398,
+  "compiled_source": "d2878140953477f4a75cd38eb81583e7809db688",
+  "validation_source": "d2878140953477f4a75cd38eb81583e7809db688",
+  "files": {
+    "FolderOrganizer-Windows-x64.zip": {
+      "bytes": 57473509,
+      "sha256": "3f6ce8135d758f1ee42e21af6227ac31c99f9aeb5e11d2326acb380145812f8f"
+    },
+    "FolderOrganizer-Rust-Windows-x64.zip": {
+      "bytes": 8732215,
+      "sha256": "9dc4a56f5c024d5519fe8166317b060e51ce800614587dc65c0b0b85daba10b4"
+    },
+    "SHA256SUMS.txt": {
+      "bytes": 203,
+      "sha256": "de4e2ba75911f30c847ae70987c2177166a8eb2d848aaaf7abe5a5dda97d2f90"
+    },
+    "VALIDATION_RESULTS.zip": {
+      "bytes": 175048,
+      "sha256": "ea25e7f9020579a851f8e70cd1ff9877de1afcb953b3aafc61d09711b7afeab7"
+    }
+  },
+  "application_tests": "not rerun; archive transfer hashes only"
+}

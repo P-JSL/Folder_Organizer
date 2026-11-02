@@ -1,0 +1,2 @@
+3f6ce8135d758f1ee42e21af6227ac31c99f9aeb5e11d2326acb380145812f8f  FolderOrganizer-Windows-x64.zip
+9dc4a56f5c024d5519fe8166317b060e51ce800614587dc65c0b0b85daba10b4  FolderOrganizer-Rust-Windows-x64.zip
