@@ -1,5 +1,7 @@
 # Folder Organizer
 
+최신 정식 릴리즈는 **[v0.9.1 · Python / Rust](https://github.com/P-JSL/Folder_Organizer/releases/tag/v0.9.1)**입니다. [실제 배포 결과](docs/RELEASE_RESULTS_0.9.1.md)에 패키지·체크섬과 기존 45건의 검사 재사용 범위를 기록했습니다.
+
 Windows에서 **내 컴퓨터의 폴더**를 선택해 파일을 살펴보고, 변경 내역을 미리 확인한 후 안전하게 정리하는 데스크톱 앱입니다. 파일은 외부 서버에 업로드하지 않습니다.
 
 **이용 권한: 권리자 P-JSL 본인과 권리자가 명시적으로 서면 허락한 사람만 사용할 수 있습니다.** 공개 저장소·다운로드 가능 여부는 사용·상업적 이용·재배포 허락이 아닙니다. [LICENSE](LICENSE) · [이용약관](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/TERMS_OF_USE.md) · [개인정보·로컬 데이터 안내](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/PRIVACY.md) · [이용허락 요청](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/PERMISSION_REQUEST.md)을 확인하세요. ZIP에는 앱 폴더의 `LICENSE`와 `licenses/FolderOrganizer/`에 관련 문서가 포함됩니다. 제3자 라이선스와 기존 적법한 권리는 유지합니다.
