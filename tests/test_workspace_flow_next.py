@@ -64,7 +64,8 @@ def test_next_workspace_real_worker_analysis_to_keep_first_and_per_root_restore(
             guard.setattr(operations, "_fingerprint", forbidden)
             guard.setattr(QMessageBox, "question", forbidden)
             workspace.keep_first_button.click()
-            wait_until(app, lambda: not workspace.is_running() and workspace.last_receipt is not None)
+            wait_until(app, lambda: not workspace.is_running())
+            assert workspace.last_receipt is not None, workspace.status.text()
         receipt = workspace.last_receipt
         assert receipt["status"] == "completed", receipt
         assert len(receipt["items"]) == 2
