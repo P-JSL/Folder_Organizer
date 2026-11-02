@@ -4,9 +4,9 @@ Windows에서 **내 컴퓨터의 폴더**를 선택해 파일을 살펴보고, �
 
 **이용 권한: 권리자 P-JSL 본인과 권리자가 명시적으로 서면 허락한 사람만 사용할 수 있습니다.** 공개 저장소·다운로드 가능 여부는 사용·상업적 이용·재배포 허락이 아닙니다. [LICENSE](LICENSE) · [이용약관](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/TERMS_OF_USE.md) · [개인정보·로컬 데이터 안내](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/PRIVACY.md) · [이용허락 요청](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/PERMISSION_REQUEST.md)을 확인하세요. ZIP에는 앱 폴더의 `LICENSE`와 `licenses/FolderOrganizer/`에 관련 문서가 포함됩니다. 제3자 라이선스와 기존 적법한 권리는 유지합니다.
 
-**최신 공개 릴리즈는 사용자 요청으로 v0.7.0으로 롤백했습니다.** 원래 v0.8.0과 v0.9.0의 Python·Rust ZIP·체크섬·배포 기록은 [DOWNLOADS](DOWNLOADS/README.md)에 보관합니다. 기존 태그와 배포 파일을 새 소스로 교체하지 않았습니다. 이미 설치한 앱을 자동으로 다운그레이드하지는 않습니다.
+v0.9.1 준비에 앞서 사용자 요청으로 최신 공개 릴리즈를 v0.7.0으로 롤백했습니다. 원래 v0.8.0과 v0.9.0의 Python·Rust ZIP·체크섬·배포 기록은 [DOWNLOADS](DOWNLOADS/README.md)에 보관합니다. 기존 태그와 배포 파일을 새 소스로 교체하지 않았습니다. 이미 설치한 앱을 자동으로 다운그레이드하지는 않습니다.
 
-**현재 개발 소스는 단일·다중 폴더의 분석 → 검사 → 정리를 같은 작업 공간에 연결했습니다.** 상단 리본 도구 모음, 왼쪽 검색 폴더·필터, 가운데 파일·중복·유사 결과, 오른쪽 파일 정보와 아래 종류별 요약을 사용합니다. [개발 소스 사용 안내](docs/WORKSPACE_ACTIONS.md) · [새 사례 45건의 확인 결과](docs/WORKSPACE_ACTION_RESULTS.md)를 참고하세요. 이 개선본은 아직 공개 릴리즈가 아닙니다.
+**v0.9.1은 단일·다중 폴더의 분석 → 검사 → 정리를 같은 작업 공간에 연결합니다.** 상단 리본 도구 모음, 왼쪽 검색 폴더·필터, 가운데 파일·중복·유사 결과, 오른쪽 파일 정보와 아래 종류별 요약을 사용합니다. [사용 안내](docs/WORKSPACE_ACTIONS.md) · [새 사례 45건의 확인 결과](docs/WORKSPACE_ACTION_RESULTS.md)를 참고하세요. 이미 통과한 검사는 정식 빌드에서 다시 실행하지 않습니다.
 
 여러 폴더를 하나의 가상 원본 폴더로 합치지 않고 실제 폴더별로 정리·복원 기록을 남깁니다. 내보낸 통합 JSON은 계속 읽기 전용이며, 파일을 바꾸는 작업은 현재 앱의 분석 세션과 미리보기에서만 실행합니다. [통합 분석 기술 안내](docs/MULTIROOT_ANALYSIS.md), [보고서 검토 판단](docs/EXTENDED_REPORT_REVIEW.md), 정식 1.0.0의 [완료 기준](docs/V1_READINESS.md)과 두 판의 [지원 경계](docs/EDITIONS_0.6.0.md)를 참고하세요.
 
@@ -22,7 +22,7 @@ Windows에서 **내 컴퓨터의 폴더**를 선택해 파일을 살펴보고, �
 
 1. [Python판 Windows ZIP](https://github.com/P-JSL/Folder_Organizer/releases/latest/download/FolderOrganizer-Windows-x64.zip) 또는 [Rust판 Windows ZIP](https://github.com/P-JSL/Folder_Organizer/releases/latest/download/FolderOrganizer-Rust-Windows-x64.zip)을 다운로드합니다. 버전별 변경 사항과 체크섬은 [Releases](https://github.com/P-JSL/Folder_Organizer/releases)에서 확인할 수 있습니다.
 2. ZIP 전체를 압축 해제한 뒤 Python은 `FolderOrganizer/FolderOrganizer.exe`, Rust는 `FolderOrganizerRust/FolderOrganizerRust.exe`를 실행합니다. 각 ZIP의 도우미·라이선스 파일과 Python의 `_internal` 폴더도 함께 보관해야 합니다.
-3. 현재 공개 v0.7.0은 폴더 선택으로 시작합니다. 개발 소스의 새 통합 작업 공간은 [별도 안내](docs/WORKSPACE_ACTIONS.md)를 따릅니다. DOWNLOADS의 v0.9.0 ZIP에는 이후 개발 변경이 포함되지 않습니다.
+3. v0.9.1은 **폴더 추가 → 분석 시작 → 검사·정리**로 진행합니다. 새 통합 작업 공간은 [사용 안내](docs/WORKSPACE_ACTIONS.md)를 따릅니다. DOWNLOADS에 보관한 v0.9.0 원본 ZIP에는 이후 변경이 포함되지 않습니다.
 
 Windows 배포판은 Windows 10/11 x64를 대상으로 하며 **Python 설치가 필요 없습니다**. 소스 실행에는 Python 3.11 이상이 필요합니다. 실행 파일은 코드 서명되지 않아 Windows에서 게시자 확인 알림을 표시할 수 있습니다. 개발용 자체 서명 인증서 생성 및 GitHub Actions의 선택적 코드 서명 방법은 [Windows 코드 서명 안내](docs/WINDOWS_CODE_SIGNING.md)를 참고하세요. 자체 서명은 Windows의 공인 게시자 인증이나 SmartScreen 경고를 제거하지 않습니다. Windows·Linux CI에서 검증하며 실행 파일은 Windows 러너에서 빌드합니다. macOS는 소스 실행 구조를 갖추었지만 별도 패키지나 실기기 검증을 제공하지 않습니다.
 
