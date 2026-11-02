@@ -4,13 +4,13 @@ Windows에서 **내 컴퓨터의 폴더**를 선택해 파일을 살펴보고, �
 
 **이용 권한: 권리자 P-JSL 본인과 권리자가 명시적으로 서면 허락한 사람만 사용할 수 있습니다.** 공개 저장소·다운로드 가능 여부는 사용·상업적 이용·재배포 허락이 아닙니다. [LICENSE](LICENSE) · [이용약관](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/TERMS_OF_USE.md) · [개인정보·로컬 데이터 안내](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/PRIVACY.md) · [이용허락 요청](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/PERMISSION_REQUEST.md)을 확인하세요. ZIP에는 앱 폴더의 `LICENSE`와 `licenses/FolderOrganizer/`에 관련 문서가 포함됩니다. 제3자 라이선스와 기존 적법한 권리는 유지합니다.
 
-**v0.7.0은 비교 보고서의 지적을 코드와 대조하여 반영한 Python·Rust Windows 배포판입니다.** Rust의 대형 파일 샘플 선별, 내용 기반 유사 후보, 부분 오류 표시와 CLI 선택지를 개선하고 두 판의 공통 보고서 형식을 추가했습니다. [보고서 항목별 검토](docs/REPORT_REVIEW_0.7.0.md)에서 확인·수정·보류의 근거를 구분합니다. 수정하지 않은 기능과 기존 통과 검사는 반복하지 않습니다. 정식 1.0.0의 [완료 기준](docs/V1_READINESS.md)과 두 판의 [지원 경계](docs/EDITIONS_0.6.0.md)도 유지합니다.
+**v0.8.0은 여러 폴더를 함께 조회하고 완전 중복을 찾는 Python·Rust Windows 배포판입니다.** 비교 보고서를 코드와 대조해 반복 읽기·이름 특징 계산을 줄였으며, 기존 SHA-256·바이트 검증과 복원을 유지합니다. [보고서 항목별 검토](docs/EXTENDED_REPORT_REVIEW.md)에서 사실·수정·설계 제안의 근거를 구분합니다. 수정하지 않은 기능과 기존 통과 검사는 반복하지 않습니다. 정식 1.0.0의 [완료 기준](docs/V1_READINESS.md)과 두 판의 [지원 경계](docs/EDITIONS_0.6.0.md)도 유지합니다.
 
-현재 안정판은 **v0.7.0**입니다. 중복 검사 결과를 재사용하는 즉시 정리, `delete_files` 보관, 복원 데이터 압축과 큰 목록의 조회·분석 개선을 포함합니다. 각 판의 자동 업데이트는 자기 판의 패키지만 확인합니다.
+현재 안정판은 **v0.8.0**입니다. 중복 검사 결과를 재사용하는 즉시 정리, `delete_files` 보관, 복원 데이터 압축과 큰 목록의 조회·분석 개선을 포함합니다. 각 판의 자동 업데이트는 자기 판의 패키지만 확인합니다.
 
-현재 개발 소스에는 확장 보고서를 대조한 [여러 폴더 읽기 전용 통합 분석](docs/MULTIROOT_ANALYSIS.md)과 반복 읽기·특징 계산 개선을 추가했습니다. **파일 → 여러 폴더 통합 분석…**에서 사용하며, [검토 판단](docs/EXTENDED_REPORT_REVIEW.md)에 확인된 사실과 새 설계 제안을 구분했습니다. 공개 v0.7.0 ZIP과 개발 소스의 변경 사항은 구분합니다.
+v0.8.0에는 확장 보고서를 대조한 [여러 폴더 읽기 전용 통합 분석](docs/MULTIROOT_ANALYSIS.md)과 반복 읽기·특징 계산 개선을 추가했습니다. **파일 → 여러 폴더 통합 분석…**에서 사용하며, [검토 판단](docs/EXTENDED_REPORT_REVIEW.md)에 확인된 사실과 새 설계 제안을 구분했습니다. 단일 폴더의 정리·복원 기록은 유지합니다.
 
-[실제 배포 결과와 Windows 측정](docs/RELEASE_RESULTS_0.7.0.md)에 패키지 용량, 새 검사 48건, 같은 입력의 두 판 비교와 미측정 범위를 기록했습니다.
+이전 v0.7.0의 [실제 배포 결과와 Windows 측정](docs/RELEASE_RESULTS_0.7.0.md)에는 당시 패키지 용량과 검사·측정 범위를 기록했습니다. 이를 v0.8.0 전체 성능 배수로 사용하지 않습니다.
 
 | 다크 모드 · 기본 | 라이트 모드 |
 | --- | --- |

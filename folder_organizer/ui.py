@@ -2730,6 +2730,9 @@ class MainWindow(QMainWindow):
 
 
 def launch() -> int:
+    if "--multiroot-smoke" in sys.argv:
+        from .multiroot_smoke import launch as launch_multiroot_smoke
+        return launch_multiroot_smoke()
     configure_logging()
     configure_execution_logging()
     install_exception_hook()

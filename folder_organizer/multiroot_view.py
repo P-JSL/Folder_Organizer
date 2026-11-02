@@ -431,3 +431,12 @@ class MultiRootDialog(QDialog):
             # the QWidget event would hide the window without notifying the
             # parent, preventing its menu entry or deferred close from resuming.
             super().closeEvent(event)
+
+    def reject(self):
+        # Escape reaches QDialog.reject directly, without a close event. Keep
+        # the worker alive until its cancellation has completed in that path too.
+        if self.is_running():
+            self._close_pending = True
+            self.cancel_analysis()
+            return
+        super().reject()

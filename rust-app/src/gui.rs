@@ -259,6 +259,60 @@ enum MultiDuplicateRow {
     File(usize, usize),
 }
 
+// Explicit release-validation mode. It drives the normal read-only window and
+// worker, waits for the external native screenshot, and never starts an update.
+struct MultiRootSmoke {
+    roots: Vec<PathBuf>,
+    options: ScanOptions,
+    report: PathBuf,
+    capture_done: PathBuf,
+    started: Instant,
+    launched: bool,
+    result_frames: u32,
+    ready_at: Option<Instant>,
+}
+
+impl MultiRootSmoke {
+    fn requested() -> AppResult<Option<Self>> {
+        if !std::env::args().any(|argument| argument == "--multiroot-smoke") {
+            return Ok(None);
+        }
+        let encoded = std::env::var("FOLDER_ORGANIZER_MULTI_SMOKE_ROOTS")
+            .map_err(|_| "Multi-root smoke roots are not configured".to_owned())?;
+        let roots: Vec<PathBuf> =
+            serde_json::from_str(&encoded).map_err(|error| error.to_string())?;
+        if roots.is_empty() || roots.len() > 64 || roots.iter().any(|root| !root.is_absolute()) {
+            return Err("Multi-root smoke requires 1–64 absolute fixture folders".into());
+        }
+        let report = std::env::var_os("FOLDER_ORGANIZER_MULTI_SMOKE_REPORT")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .ok_or("Multi-root smoke requires an absolute external report path")?;
+        let exclude_patterns = match std::env::var("FOLDER_ORGANIZER_MULTI_SMOKE_EXCLUDES") {
+            Ok(encoded) => {
+                serde_json::from_str::<Vec<String>>(&encoded).map_err(|error| error.to_string())?
+            }
+            Err(std::env::VarError::NotPresent) => vec![],
+            Err(error) => return Err(error.to_string()),
+        };
+        let mut marker = report.as_os_str().to_os_string();
+        marker.push(".capture-done");
+        Ok(Some(Self {
+            roots,
+            options: ScanOptions {
+                exclude_patterns,
+                ..Default::default()
+            },
+            report,
+            capture_done: PathBuf::from(marker),
+            started: Instant::now(),
+            launched: false,
+            result_frames: 0,
+            ready_at: None,
+        }))
+    }
+}
+
 pub struct OrganizerApp {
     settings: Settings,
     root: Option<PathBuf>,
@@ -318,6 +372,7 @@ pub struct OrganizerApp {
     next_update_check: Instant,
     quit_requested: bool,
     smoke_frames: Option<u32>,
+    multi_smoke: Option<MultiRootSmoke>,
     multi_open: bool,
     multi_folders: Vec<MultiFolderInput>,
     multi_result: Option<Arc<multiroot::MultiAnalysis>>,
@@ -334,6 +389,14 @@ impl OrganizerApp {
     pub fn new(context: &eframe::CreationContext<'_>) -> Self {
         install_fonts(&context.egui_ctx);
         let settings = load_settings();
+        let multi_smoke = MultiRootSmoke::requested().unwrap_or_else(|error| {
+            eprintln!("Multi-root GUI smoke configuration failed: {error}");
+            std::process::exit(1);
+        });
+        let smoke_frames = (multi_smoke.is_none()
+            && (std::env::args().any(|arg| arg == "--gui-smoke")
+                || std::env::var("FOLDER_ORGANIZER_RUST_SMOKE").is_ok_and(|value| value == "1")))
+        .then_some(0);
         apply_theme(&context.egui_ctx, settings.dark);
         let scan_excludes = settings.scan.exclude_patterns.join("\n");
         let multi_folders = settings
@@ -403,9 +466,8 @@ impl OrganizerApp {
             prepared: None,
             next_update_check: Instant::now() + Duration::from_secs(5),
             quit_requested: false,
-            smoke_frames: (std::env::args().any(|arg| arg == "--gui-smoke")
-                || std::env::var("FOLDER_ORGANIZER_RUST_SMOKE").is_ok_and(|value| value == "1"))
-            .then_some(0),
+            smoke_frames,
+            multi_smoke,
             multi_open: false,
             multi_folders,
             multi_result: None,
@@ -885,6 +947,63 @@ impl OrganizerApp {
                     .map(ResultData::Multi)
             },
         );
+    }
+    fn advance_multiroot_smoke(&mut self, context: &egui::Context) {
+        let Some(smoke) = self.multi_smoke.as_ref() else {
+            return;
+        };
+        if smoke.started.elapsed() > Duration::from_secs(30) {
+            eprintln!("Multi-root GUI smoke timed out before native capture completion");
+            std::process::exit(1);
+        }
+        if !smoke.launched {
+            let roots = smoke.roots.clone();
+            self.settings.scan = smoke.options.clone();
+            self.multi_smoke.as_mut().unwrap().launched = true;
+            self.multi_folders = roots
+                .iter()
+                .cloned()
+                .map(|path| MultiFolderInput {
+                    path,
+                    selected: true,
+                })
+                .collect();
+            self.multi_open = true;
+            self.start_multiroot(context, roots);
+            return;
+        }
+        if self.busy.is_some() {
+            return;
+        }
+        if let Some(error) = &self.error {
+            eprintln!("Multi-root GUI smoke worker failed: {error}");
+            std::process::exit(1);
+        }
+        let Some(report) = self.multi_result.as_ref() else {
+            return;
+        };
+        if !report.complete || report.cancelled || report.action_authority || !self.multi_open {
+            eprintln!("Multi-root GUI smoke did not produce a complete visible read-only result");
+            std::process::exit(1);
+        }
+        let smoke = self.multi_smoke.as_mut().unwrap();
+        smoke.result_frames += 1;
+        // Presented frames precede the ready file, so the driver can capture
+        // actual final results rather than a startup or loading canvas.
+        if smoke.ready_at.is_none() && smoke.result_frames >= 8 {
+            if let Err(error) = reporting::export_multiroot_json(report.as_ref(), &smoke.report) {
+                eprintln!("Multi-root GUI smoke report failed: {error}");
+                std::process::exit(1);
+            }
+            smoke.ready_at = Some(Instant::now());
+        }
+        if smoke
+            .ready_at
+            .is_some_and(|ready| ready.elapsed() >= Duration::from_millis(500))
+            && smoke.capture_done.is_file()
+        {
+            context.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
     fn export_multiroot(&mut self, context: &egui::Context) {
         if self.busy.is_some() {
@@ -2961,7 +3080,9 @@ impl eframe::App for OrganizerApp {
                 }
             }
             if self.quit_requested {
-                save_settings(&self.settings);
+                if self.multi_smoke.is_none() {
+                    save_settings(&self.settings);
+                }
                 context.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
@@ -2970,6 +3091,7 @@ impl eframe::App for OrganizerApp {
             && self.prepared.is_none()
             && self.update.is_none()
             && self.smoke_frames.is_none()
+            && self.multi_smoke.is_none()
             && Instant::now() >= self.next_update_check
         {
             self.check_update(context, false);
@@ -2978,6 +3100,7 @@ impl eframe::App for OrganizerApp {
         self.footer(context);
         self.workspace(context);
         self.dialogs(context);
+        self.advance_multiroot_smoke(context);
         if let Some(frames) = &mut self.smoke_frames {
             *frames += 1;
             // update callbacks after the first are issued only after the native
@@ -2986,14 +3109,16 @@ impl eframe::App for OrganizerApp {
                 context.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             context.request_repaint_after(Duration::from_millis(100));
-        } else if self.busy.is_some() || self.quit_requested {
+        } else if self.busy.is_some() || self.quit_requested || self.multi_smoke.is_some() {
             context.request_repaint_after(Duration::from_millis(80));
         } else {
             context.request_repaint_after(Duration::from_secs(1));
         }
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        save_settings(&self.settings);
+        if self.multi_smoke.is_none() {
+            save_settings(&self.settings);
+        }
     }
 }
 
