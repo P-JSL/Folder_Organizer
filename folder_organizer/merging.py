@@ -210,13 +210,34 @@ def _output_name(value: str, suffix: str) -> str:
 
 def build_merge_preview(root, paths, *, destination=None, output_name=None,
                         move_originals=False, progress_detail=None) -> dict:
+    directory = ops._root(root)
+    selected = list(dict.fromkeys(ops._source(path, directory) for path in paths))
+    return _build_merge_preview_for_sources(directory, selected, destination=destination,
+        output_name=output_name, move_originals=move_originals, progress_detail=progress_detail)
+
+
+def _build_scoped_merge_preview(paths, owners, *, destination=None, output_name=None,
+                                 move_originals=False, progress_detail=None):
+    """Read each input under its own real root for the workspace coordinator."""
+    selected = list(dict.fromkeys(ops._source(path, ops._root(owners[path])) for path in paths))
+    if not selected:
+        raise MergeError("병합할 파일을 선택하세요.")
+    plan = _build_merge_preview_for_sources(ops._root(owners[str(selected[0])]), selected,
+        destination=destination, output_name=output_name, move_originals=move_originals,
+        progress_detail=progress_detail)
+    for item in plan["sources"]:
+        item["root"] = str(ops._root(owners[item["path"]]))
+    plan["signature"] = ops._sign(plan, _KEY)
+    return plan
+
+
+def _build_merge_preview_for_sources(directory, selected, *, destination=None, output_name=None,
+                                      move_originals=False, progress_detail=None) -> dict:
     """Build an immutable preview without creating files, directories or logs.
 
     Selection order defines the output order. Similar titles are a selection aid,
     never evidence for discarding nonidentical paragraphs/cells.
     """
-    directory = ops._root(root)
-    selected = list(dict.fromkeys(ops._source(path, directory) for path in paths))
     if not 2 <= len(selected) <= MAX_FILES:
         raise MergeError("병합할 파일을 2~20개 선택하세요.")
     if not isinstance(move_originals, bool):

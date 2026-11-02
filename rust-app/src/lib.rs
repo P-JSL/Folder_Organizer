@@ -9,6 +9,7 @@ pub mod reporting;
 pub mod rules;
 pub mod similarity;
 pub mod updater;
+pub mod workspace_actions;
 
 #[cfg(feature = "gui")]
 pub mod gui;

@@ -486,7 +486,7 @@ fn current_entry_snapshot(entry: &FileEntry) -> AppResult<FileSnapshot> {
 }
 
 fn indexed_pairs(
-    scan: &ScanResult,
+    files: &[FileEntry],
     options: &SimilarOptions,
     cancel: &AtomicBool,
     progress: Option<&dyn Fn(Progress)>,
@@ -498,7 +498,7 @@ fn indexed_pairs(
     let mut index: HashMap<String, VecDeque<usize>> = HashMap::new();
     let mut key_order = VecDeque::new();
     let mut sample = BinaryHeap::new();
-    for (current, entry) in scan.files.iter().enumerate() {
+    for (current, entry) in files.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             report.cancelled = true;
             break;
@@ -593,12 +593,12 @@ fn indexed_pairs(
             .index_keys_retained_peak
             .max(index.len());
         report.candidate_index.files_visited += 1;
-        if current < 10 || (current + 1) % 32 == 0 || current + 1 == scan.files.len() {
+        if current < 10 || (current + 1) % 32 == 0 || current + 1 == files.len() {
             if let Some(callback) = progress {
                 callback(Progress {
                     phase: "similar_index".into(),
                     completed: (current + 1) as u64,
-                    total: Some(scan.files.len() as u64),
+                    total: Some(files.len() as u64),
                     message: "이름·텍스트 특징·이미지 특징에서 제한된 비교 후보를 찾고 있습니다."
                         .into(),
                 });
@@ -645,6 +645,27 @@ pub fn find_similar_excluding(
     cancel: &AtomicBool,
     progress: Option<&dyn Fn(Progress)>,
 ) -> AppResult<SimilarAnalysis> {
+    find_similar_files_excluding(
+        &scan.files,
+        !scan.cancelled && scan.warnings.is_empty(),
+        scan.cancelled,
+        options,
+        exact_groups,
+        cancel,
+        progress,
+    )
+}
+
+/// Shared in-memory inventory entry point; never invents a common write root.
+pub(crate) fn find_similar_files_excluding(
+    files: &[FileEntry],
+    inventory_complete: bool,
+    inventory_cancelled: bool,
+    options: &SimilarOptions,
+    exact_groups: &[DuplicateGroup],
+    cancel: &AtomicBool,
+    progress: Option<&dyn Fn(Progress)>,
+) -> AppResult<SimilarAnalysis> {
     if !options.compare_names && !options.compare_text && !options.compare_images {
         return Err("이름·텍스트·이미지 비교를 하나 이상 선택하세요.".into());
     }
@@ -659,7 +680,7 @@ pub fn find_similar_excluding(
     {
         return Err("유사도 기준은 0~1, 비교 한도는 1~100,000이어야 합니다.".into());
     }
-    let count = scan.files.len();
+    let count = files.len();
     let mut exact_membership = HashMap::new();
     for (index, group) in exact_groups.iter().enumerate() {
         validate_group(group)?;
@@ -674,8 +695,8 @@ pub fn find_similar_excluding(
         compared_pairs: 0,
         possible_pairs: possible,
         excluded_exact_pairs: 0,
-        complete: exhaustive && !scan.cancelled && scan.warnings.is_empty(),
-        cancelled: scan.cancelled,
+        complete: exhaustive && inventory_complete,
+        cancelled: inventory_cancelled,
         warnings: vec![],
         options: options.clone(),
         candidate_index: CandidateIndexMetrics {
@@ -718,7 +739,7 @@ pub fn find_similar_excluding(
             }
         } else {
             pairs = indexed_pairs(
-                scan,
+                files,
                 options,
                 cancel,
                 progress,
@@ -736,8 +757,8 @@ pub fn find_similar_excluding(
             report.complete = false;
             break;
         }
-        let a = &scan.files[left];
-        let b = &scan.files[right];
+        let a = &files[left];
+        let b = &files[right];
         if exact_membership
             .get(&a.path)
             .is_some_and(|group| exact_membership.get(&b.path) == Some(group))

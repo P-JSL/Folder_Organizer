@@ -18,13 +18,14 @@ class _PreviewWorker(QThread):
     failed = Signal(str)
     progress = Signal(object)
 
-    def __init__(self, root, paths, options, parent=None):
+    def __init__(self, root, paths, options, parent=None, *, preview_builder=None):
         super().__init__(parent)
         self.root, self.paths, self.options = root, paths, options
+        self.preview_builder = preview_builder or build_merge_preview
 
     def run(self):
         try:
-            self.ready.emit(build_merge_preview(self.root, self.paths,
+            self.ready.emit(self.preview_builder(self.root, self.paths,
                                                 progress_detail=self.progress.emit, **self.options))
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -35,13 +36,14 @@ class MergeDialog(QDialog):
 
     plan_ready = Signal(object)
 
-    def __init__(self, root, paths, parent=None):
+    def __init__(self, root, paths, parent=None, *, preview_builder=None):
         super().__init__(parent)
         self.setWindowTitle("내용 병합")
         self.resize(900, 700)
         self.root, self.paths = str(root), list(dict.fromkeys(map(str, paths)))
         self.plan = None
         self._worker = None
+        self._preview_builder = preview_builder
         layout = QVBoxLayout(self)
         title = QLabel("겹치는 내용은 한 번만, 다른 내용은 모두 유지")
         title.setObjectName("section")
@@ -141,7 +143,7 @@ class MergeDialog(QDialog):
         self.summary.setText("원본을 읽고 겹치는 문단·행을 확인하고 있습니다…")
         options = {"destination": self.destination.text(), "output_name": self.output_name.text(),
                    "move_originals": self.move_originals.isChecked()}
-        worker = _PreviewWorker(self.root, self.paths, options, self)
+        worker = _PreviewWorker(self.root, self.paths, options, self, preview_builder=self._preview_builder)
         self._worker = worker
         worker.ready.connect(self._preview_ready)
         worker.failed.connect(self._preview_failed)

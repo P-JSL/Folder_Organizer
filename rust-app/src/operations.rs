@@ -1716,8 +1716,18 @@ pub fn execute(
     }
     let key = journal_key(&root, true)?;
     let _lock = OperationLock::acquire(&root, &key)?;
+    execute_under_lock(plan, key, cancel, callback)
+}
+
+fn execute_under_lock(
+    plan: &OperationPlan,
+    key: Vec<u8>,
+    cancel: &AtomicBool,
+    callback: Option<&dyn Fn(Progress)>,
+) -> AppResult<OperationReceipt> {
+    let root = &plan.root;
     for item in &plan.items {
-        source_in(&root, &item.source)?;
+        source_in(root, &item.source)?;
         assert_snapshot(&item.source, &item.snapshot)?;
         if let Some((p, s)) = &item.keeper {
             assert_snapshot(p, s)?;
@@ -1770,6 +1780,239 @@ pub fn execute(
     }
     let _ = store.compress_metadata();
     Ok(store.receipt(cancelled))
+}
+
+/// A workspace holds every actual source and keeper root for the entire batch.
+/// This shares the same OS lock as single-root operations and the Python app.
+pub(crate) struct WorkspaceLocks {
+    keys: HashMap<PathBuf, Vec<u8>>,
+    _locks: Vec<OperationLock>,
+}
+
+impl WorkspaceLocks {
+    pub(crate) fn acquire(roots: &[PathBuf]) -> AppResult<Self> {
+        let mut actual = roots
+            .iter()
+            .map(|root| root_path(root))
+            .collect::<AppResult<Vec<_>>>()?;
+        actual.sort_by_key(|root| target_key(root));
+        actual.dedup();
+        let mut keys = HashMap::new();
+        let mut locks = Vec::new();
+        for root in actual {
+            let key = journal_key(&root, true)?;
+            locks.push(OperationLock::acquire(&root, &key)?);
+            keys.insert(root, key);
+        }
+        Ok(Self {
+            keys,
+            _locks: locks,
+        })
+    }
+
+    pub(crate) fn execute(
+        &self,
+        plan: &OperationPlan,
+        cancel: &AtomicBool,
+        callback: Option<&dyn Fn(Progress)>,
+    ) -> AppResult<OperationReceipt> {
+        verify(plan_key(), &plan_binding(plan)?, &plan.proof)?;
+        let key = self
+            .keys
+            .get(&plan.root)
+            .ok_or("작업 폴더의 잠금이 없습니다.")?;
+        if root_path(&plan.root)? != plan.root {
+            return Err("선택 폴더가 변경되었습니다.".into());
+        }
+        execute_under_lock(plan, key.clone(), cancel, callback)
+    }
+}
+
+/// Reserve preview targets across all root plans, then reseal each plan. The
+/// caller can only supply plans made by the authenticated operation builders.
+pub(crate) fn reserve_workspace_targets(
+    plans: &mut [OperationPlan],
+    sources: &[PathBuf],
+) -> AppResult<()> {
+    let mut reserved = sources
+        .iter()
+        .map(|path| target_key(path))
+        .collect::<BTreeSet<_>>();
+    let mut counters = HashMap::new();
+    for plan in plans {
+        verify(plan_key(), &plan_binding(plan)?, &plan.proof)?;
+        for item in &mut plan.items {
+            item.target = unique_target(&item.target, &mut reserved, &mut counters)?;
+        }
+        plan.proof = mac(plan_key(), &plan_binding(plan)?)?;
+    }
+    Ok(())
+}
+
+/// Validate the entire workspace before the first journal is executed. A
+/// keeper may be in another real root, but never among any source or target.
+pub(crate) fn preflight_workspace(plans: &[OperationPlan]) -> AppResult<()> {
+    let mut sources = BTreeSet::new();
+    let mut targets = BTreeSet::new();
+    let mut physical = BTreeSet::new();
+    for plan in plans {
+        verify(plan_key(), &plan_binding(plan)?, &plan.proof)?;
+        if plan.items.is_empty()
+            || plan.items.len() > MAX_FILES
+            || root_path(&plan.root)? != plan.root
+        {
+            return Err("작업 폴더 또는 계획이 올바르지 않습니다.".into());
+        }
+        for item in &plan.items {
+            source_in(&plan.root, &item.source)?;
+            assert_snapshot(&item.source, &item.snapshot)?;
+            if !sources.insert(target_key(&item.source))
+                || !targets.insert(target_key(&item.target))
+            {
+                return Err("여러 폴더의 원본·대상 경로가 겹칩니다.".into());
+            }
+            if item.snapshot.inode != 0 {
+                physical.insert((item.snapshot.device, item.snapshot.inode));
+            }
+        }
+    }
+    if !sources.is_disjoint(&targets) {
+        return Err("다른 원본 파일을 대상으로 사용할 수 없습니다.".into());
+    }
+    for plan in plans {
+        for item in &plan.items {
+            if let Some((keeper, snapshot)) = &item.keeper {
+                if sources.contains(&target_key(keeper))
+                    || targets.contains(&target_key(keeper))
+                    || snapshot.inode != 0 && physical.contains(&(snapshot.device, snapshot.inode))
+                {
+                    return Err("보존 원본·하드링크가 다른 정리 대상에 포함되어 있습니다.".into());
+                }
+                assert_snapshot(keeper, snapshot)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn workspace_lock_roots(
+    plans: &[OperationPlan],
+    scans: &[ScanResult],
+) -> AppResult<Vec<PathBuf>> {
+    let owners = scans
+        .iter()
+        .flat_map(|scan| scan.files.iter().map(move |file| (&file.path, &scan.root)))
+        .collect::<HashMap<_, _>>();
+    let mut roots = BTreeSet::new();
+    for plan in plans {
+        roots.insert(plan.root.clone());
+        for item in &plan.items {
+            if let Some((keeper, _)) = &item.keeper {
+                let owner = owners
+                    .get(keeper)
+                    .ok_or("보존 원본의 실제 폴더를 확인할 수 없습니다.")?;
+                roots.insert((*owner).clone());
+            }
+        }
+    }
+    Ok(roots.into_iter().collect())
+}
+
+/// Build per-root authenticated delete plans from the original global proofs.
+/// All path, identity and ChangeTime guards are metadata checks; no rehashing.
+pub(crate) fn workspace_keep_first_plans(
+    scans: &[ScanResult],
+    groups: &[DuplicateGroup],
+    protected: &[PathBuf],
+) -> AppResult<Vec<OperationPlan>> {
+    let protected = protected
+        .iter()
+        .map(|folder| {
+            plain(folder)?;
+            fs::canonicalize(folder).map_err(|e| err("보호 폴더 확인 실패", e))
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    let mut owners = HashMap::new();
+    let mut roots = BTreeSet::new();
+    for scan in scans {
+        if scan.cancelled {
+            return Err("완료된 폴더 분석이 필요합니다.".into());
+        }
+        let root = root_path(&scan.root)?;
+        roots.insert(root.clone());
+        for entry in &scan.files {
+            if owners
+                .insert(entry.path.clone(), (root.clone(), entry))
+                .is_some()
+            {
+                return Err("파일의 실제 소속이 겹칩니다.".into());
+            }
+        }
+    }
+    let mut grouped: HashMap<PathBuf, Vec<PlannedItem>> = HashMap::new();
+    let mut seen = BTreeSet::new();
+    let mut seen_physical = BTreeSet::new();
+    let mut used = BTreeSet::new();
+    let mut counters = HashMap::new();
+    for group in groups {
+        core::validate_group(group)?;
+        let keeper = group.paths.first().ok_or("빈 중복 그룹입니다.")?;
+        let keeper_snapshot =
+            core::group_snapshot(group, keeper).ok_or("보존 원본 정보가 없습니다.")?;
+        for path in &group.paths {
+            let (root, entry) = owners
+                .get(path)
+                .ok_or("현재 분석 범위 밖의 중복 파일입니다.")?;
+            source_in(root, path)?;
+            let expected =
+                core::group_snapshot(group, path).ok_or("검증된 파일 정보가 없습니다.")?;
+            if !seen.insert(target_key(path))
+                || expected.inode != 0 && !seen_physical.insert((expected.device, expected.inode))
+            {
+                return Err("중복 그룹에 같은 경로·하드링크가 겹칩니다.".into());
+            }
+            if entry.size != expected.size
+                || entry.modified_ns != expected.modified_ns
+                || entry
+                    .identity
+                    .as_ref()
+                    .is_some_and(|identity| identity != expected)
+            {
+                return Err("중복 그룹과 현재 분석 정보가 다릅니다.".into());
+            }
+            assert_snapshot(path, expected)?;
+        }
+        for path in group.paths.iter().skip(1) {
+            if protected.iter().any(|folder| path.starts_with(folder)) {
+                continue;
+            }
+            let (root, _) = &owners[path];
+            let snapshot = core::group_snapshot(group, path).unwrap().clone();
+            let target = unique_target(
+                &root
+                    .join("delete_files")
+                    .join(path.file_name().ok_or("파일 이름 오류")?),
+                &mut used,
+                &mut counters,
+            )?;
+            grouped.entry(root.clone()).or_default().push(PlannedItem {
+                source: path.clone(),
+                target,
+                size: snapshot.size,
+                snapshot,
+                sha256: Some(group.sha256.clone()),
+                keeper: Some((keeper.clone(), keeper_snapshot.clone())),
+            });
+        }
+    }
+    roots
+        .into_iter()
+        .filter_map(|root| {
+            grouped
+                .remove(&root)
+                .map(|items| signed_plan(root, TransferKind::Delete, items))
+        })
+        .collect()
 }
 
 fn raw_recovery_path(journal: &Journal, item: &JournalItem) -> Option<PathBuf> {

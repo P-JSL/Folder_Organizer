@@ -8,6 +8,7 @@ are valid only in the process which created them. Journals survive restarts.
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import datetime as dt
 import hashlib
 import hmac
@@ -33,6 +34,7 @@ _PLAN_KEY = secrets.token_bytes(32)
 _CHUNK = 1024 * 1024
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _BINARY = getattr(os, "O_BINARY", 0)
+_WORKSPACE_LOCKS = contextvars.ContextVar("folder_organizer_workspace_locks", default=frozenset())
 
 
 class OperationError(ValueError):
@@ -378,11 +380,18 @@ def build_routed_plan(root: str | Path, routes: list[dict], *,
     return plan
 
 
+def _keeper_path(guard: dict, source_root: Path) -> Path:
+    # A different keeper root is present only in process-signed workspace
+    # plans. It is validated independently; it never expands the source root.
+    keeper_root = _root(guard["root"]) if "root" in guard else source_root
+    return _source(guard["path"], keeper_root)
+
+
 def _duplicate_guard(item: dict, root: Path) -> None:
     guard = item.get("duplicate_keeper")
     if not guard:
         return
-    keeper = _source(guard["path"], root)
+    keeper = _keeper_path(guard, root)
     source = _source(item["source"], root)
     if keeper == source:
         raise OperationError("중복 사본과 보존 원본은 다른 파일이어야 합니다.")
@@ -498,6 +507,27 @@ def _lock(state: Path) -> Iterator[None]:
         yield
     finally:
         os.close(fd)
+
+
+@contextlib.contextmanager
+def _workspace_locks(roots) -> Iterator[None]:
+    """Hold every real source/keeper journal lock in deterministic order."""
+    directories = sorted({_root(root) for root in roots}, key=lambda path: (str(path).casefold(), str(path)))
+    names = frozenset(str(path) for path in directories)
+    if _WORKSPACE_LOCKS.get():
+        raise OperationError("통합 정리 작업을 중첩 실행할 수 없습니다.")
+    with contextlib.ExitStack() as stack:
+        for directory in directories:
+            stack.enter_context(_lock(_state(directory)))
+        token = _WORKSPACE_LOCKS.set(names)
+        try:
+            yield
+        finally:
+            _WORKSPACE_LOCKS.reset(token)
+
+
+def _operation_lock(root: Path):
+    return contextlib.nullcontext() if str(root) in _WORKSPACE_LOCKS.get() else _lock(_state(root))
 
 
 def _write_journal(path: Path, journal: dict, key: bytes, *, initial: bool = False) -> None:
@@ -790,7 +820,7 @@ def _execute_direct_delete(item: dict, root: Path, journal: dict, path: Path, ke
             _verify(target, item)
         guard = item.get("duplicate_keeper")
         if guard:
-            keeper = _source(guard["path"], root)
+            keeper = _keeper_path(guard, root)
             if item.get("snapshot_reuse") is True and guard.get("snapshot_reuse") is True:
                 _snapshot_guard(keeper, guard)
             else:
@@ -808,14 +838,14 @@ def _execute_direct_delete(item: dict, root: Path, journal: dict, path: Path, ke
         raise
 
 
-def execute_plan(plan: dict, *, progress_detail: Callable[[dict], None] | None = None) -> dict:
+def execute_plan(plan: dict, *, progress_detail: Callable[[dict], None] | None = None, cancel=None) -> dict:
     """Execute a preview and retain bounded, nonfatal execution receipts."""
     identifier = plan.get("id", "") if isinstance(plan, dict) else ""
     action = plan.get("mode", "unknown") if isinstance(plan, dict) else "unknown"
     _execution_event("execution.started", execution_id=identifier, action=action,
                      status="started", message="파일 정리 실행을 시작합니다.")
     try:
-        result = _execute_plan(plan, progress_detail=progress_detail)
+        result = _execute_plan(plan, progress_detail=progress_detail, cancel=cancel)
     except Exception as exc:
         _execution_event("execution.failed", execution_id=identifier, action=action,
                          status="failed", message="파일 정리 실행이 중단되었습니다.", error=str(exc))
@@ -827,7 +857,7 @@ def execute_plan(plan: dict, *, progress_detail: Callable[[dict], None] | None =
     return result
 
 
-def _execute_plan(plan: dict, *, progress_detail: Callable[[dict], None] | None = None) -> dict:
+def _execute_plan(plan: dict, *, progress_detail: Callable[[dict], None] | None = None, cancel=None) -> dict:
     """Execute an unchanged preview. Individual failures never discard originals."""
     _check_signature(plan, _PLAN_KEY)
     directory = _root(plan["root"])
@@ -861,7 +891,7 @@ def _execute_plan(plan: dict, *, progress_detail: Callable[[dict], None] | None 
                                "probe_error": str(exc)[:300], "recycle_only_verified": False}
     _progress(progress_detail, "execute", 0, len(plan["items"]), "검증된 작업 시작")
     state = _state(directory)
-    with _lock(state):
+    with _operation_lock(directory):
         key = _key(state)
         journals = state / "history"
         _mkdir(journals)
@@ -878,6 +908,10 @@ def _execute_plan(plan: dict, *, progress_detail: Callable[[dict], None] | None 
                                      "target_created": False})
         _write_journal(journal_path, journal, key, initial=True)
         for index, item in enumerate(journal["items"], 1):
+            if cancel is not None and cancel.is_set():
+                journal["status"] = "cancelled"
+                _write_journal(journal_path, journal, key)
+                return journal
             source, target = Path(item["source"]), Path(item["target"])
             try:
                 if item.get("deletion_storage") == "delete_files":

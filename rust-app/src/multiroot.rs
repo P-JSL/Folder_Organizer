@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 const MAX_ROOTS: usize = 64;
@@ -111,6 +111,97 @@ pub struct MultiAnalysis {
     pub duplicates: MultiDuplicates,
     pub timings: Timings,
     pub scheduling: Scheduling,
+}
+
+/// Process-local action context. Exported reports never carry this authority.
+/// Clones share a one-shot token, consumed by every attempted batch execution.
+#[derive(Clone, Debug)]
+pub struct WorkspaceSession {
+    report: MultiAnalysis,
+    inventory: Vec<FileEntry>,
+    scans: Vec<core::ScanResult>,
+    groups: Vec<core::DuplicateGroup>,
+    pub(crate) consumed: Arc<AtomicBool>,
+}
+impl WorkspaceSession {
+    pub fn report(&self) -> &MultiAnalysis {
+        &self.report
+    }
+    pub fn files(&self) -> &[FileEntry] {
+        &self.inventory
+    }
+    pub fn scans(&self) -> &[core::ScanResult] {
+        &self.scans
+    }
+    pub fn groups(&self) -> &[core::DuplicateGroup] {
+        &self.groups
+    }
+    pub fn actionable(&self) -> bool {
+        self.report.complete && !self.report.cancelled && !self.consumed.load(Ordering::Acquire)
+    }
+    pub fn invalidate(&self) {
+        self.consumed.store(true, Ordering::Release);
+    }
+    pub(crate) fn require_active(&self) -> AppResult<()> {
+        if self.actionable() {
+            Ok(())
+        } else {
+            Err("완료된 현재 분석 결과가 필요합니다. 이미 실행했거나 범위가 바뀐 결과는 사용할 수 없습니다.".into())
+        }
+    }
+}
+
+/// Analyze one or many real roots without manufacturing a common write root.
+pub fn analyze_workspace(
+    requested: &[PathBuf],
+    options: &ScanOptions,
+    duplicates: bool,
+    max_workers: usize,
+    cancel: &AtomicBool,
+    progress: Option<&(dyn Fn(MultiProgress) + Sync)>,
+) -> AppResult<WorkspaceSession> {
+    let (report, inventory, groups) = analyze_internal(
+        requested,
+        options,
+        duplicates,
+        max_workers,
+        cancel,
+        progress,
+    )?;
+    let owners: HashMap<_, _> = report
+        .files
+        .iter()
+        .map(|file| (&file.path, &file.owner_root_id))
+        .collect();
+    let mut owned: HashMap<String, Vec<FileEntry>> = HashMap::new();
+    for entry in &inventory {
+        if let Some(owner) = owners.get(&entry.path) {
+            owned
+                .entry((*owner).clone())
+                .or_default()
+                .push(entry.clone());
+        }
+    }
+    let scans = report
+        .roots
+        .iter()
+        .filter_map(|root| {
+            root.path.as_ref().map(|path| core::ScanResult {
+                root: path.clone(),
+                files: owned.remove(&root.root_id).unwrap_or_default(),
+                warnings: root.warnings.clone(),
+                cancelled: root.state != "complete",
+                metrics: core::ScanMetrics::default(),
+            })
+        })
+        .collect();
+    Ok(WorkspaceSession {
+        report,
+        inventory,
+        scans,
+        groups,
+        consumed: Arc::new(AtomicBool::new(false)),
+    })
 }
 
 fn emit(
@@ -213,6 +304,25 @@ pub fn analyze(
     cancel: &AtomicBool,
     progress: Option<&(dyn Fn(MultiProgress) + Sync)>,
 ) -> AppResult<MultiAnalysis> {
+    analyze_internal(
+        requested,
+        options,
+        duplicates,
+        max_workers,
+        cancel,
+        progress,
+    )
+    .map(|(report, _, _)| report)
+}
+
+fn analyze_internal(
+    requested: &[PathBuf],
+    options: &ScanOptions,
+    duplicates: bool,
+    max_workers: usize,
+    cancel: &AtomicBool,
+    progress: Option<&(dyn Fn(MultiProgress) + Sync)>,
+) -> AppResult<(MultiAnalysis, Vec<FileEntry>, Vec<core::DuplicateGroup>)> {
     if requested.is_empty() || requested.len() > MAX_ROOTS || !(1..=4).contains(&max_workers) {
         return Err("폴더 1~64개와 동시 탐색 수 1~4를 지정하세요.".into());
     }
@@ -460,6 +570,7 @@ pub fn analyze(
         metrics: DuplicateMetrics::default(),
         groups: vec![],
     };
+    let mut authenticated_groups = Vec::new();
     let hash_started = Instant::now();
     if duplicates {
         if cancelled {
@@ -487,9 +598,10 @@ pub fn analyze(
                         .iter()
                         .map(|file| (&file.path, &file.root_ids))
                         .collect();
-                    exact.groups = analysis
-                        .groups
-                        .into_iter()
+                    authenticated_groups = analysis.groups;
+                    exact.groups = authenticated_groups
+                        .iter()
+                        .cloned()
                         .map(|group| {
                             let mut root_ids: Vec<_> = group
                                 .paths
@@ -531,7 +643,7 @@ pub fn analyze(
     };
     let cancelled = cancelled || exact.cancelled || cancel.load(Ordering::Relaxed);
     let complete = inventory_complete && !cancelled && exact.complete.unwrap_or(true);
-    Ok(MultiAnalysis {
+    Ok((MultiAnalysis {
         schema: "folder-organizer.multiroot.v1".into(),
         app_version: env!("CARGO_PKG_VERSION").into(),
         action_authority: false,
@@ -554,5 +666,5 @@ pub fn analyze(
                 "same-volume/server sequential; independent groups bounded; exact hashing serial"
                     .into(),
         },
-    })
+    }, inventory, authenticated_groups))
 }

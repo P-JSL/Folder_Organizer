@@ -699,7 +699,7 @@ class MainWindow(QMainWindow):
         bar.setNativeMenuBar(False)
         self.file_menu = bar.addMenu("파일")
         self._menu_action(self.file_menu, "검색 폴더 추가…", self.add_workspace_folders, shortcut="Ctrl+O")
-        self._menu_action(self.file_menu, "단일 폴더 정리…", self.choose_folder)
+        self._menu_action(self.file_menu, "폴더 하나 선택·분석…", self.choose_folder)
         self._menu_action(self.file_menu, "메인 통합 분석", self.show_multiroot, shortcut="Ctrl+Shift+O")
         self.recent_menu = self.file_menu.addMenu("최근 폴더")
         self._refresh_recent_menu()
@@ -795,6 +795,8 @@ class MainWindow(QMainWindow):
             action.setChecked(key == self.theme_mode)
 
     def _manual_action(self, mode, basis):
+        if self.workspace_mode == "global":
+            return self.workspace.show_rules(mode) if mode in {"date", "extension"} else self.workspace.preview_action(mode)
         # Date and extension classification share the rule editor. Keep legacy
         # callers working without exposing duplicate, less flexible workflows.
         if mode in {"date", "extension"}:
@@ -842,6 +844,7 @@ class MainWindow(QMainWindow):
         self._refresh_recent_menu()
 
     def show_overview(self):
+        if self.workspace_mode == "global": return self.workspace._update_type_summary()
         if not self._require_scan():
             return
         if self._overview_dialog is not None and self._overview_dialog.isVisible():
@@ -888,18 +891,21 @@ class MainWindow(QMainWindow):
         scope_bar.setObjectName("header")
         scope_layout = QHBoxLayout(scope_bar)
         scope_layout.setContentsMargins(14, 5, 14, 5)
-        self.global_scope_button = QPushButton("통합 분석")
+        self.global_scope_button = QPushButton("파일 작업 공간")
         self.global_scope_button.setCheckable(True)
         self.global_scope_button.clicked.connect(self.show_multiroot)
         scope_layout.addWidget(self.global_scope_button)
-        self.single_scope_button = QPushButton("선택 폴더 정리")
+        self.single_scope_button = QPushButton("선택 폴더만 분석")
         self.single_scope_button.setCheckable(True)
         self.single_scope_button.clicked.connect(self._return_to_single_scope)
         scope_layout.addWidget(self.single_scope_button)
-        self.scope_mode_label = QLabel("체크한 폴더의 파일과 중복을 함께 확인합니다. 읽기 전용")
+        self.scope_mode_label = QLabel("폴더 하나·여러 개 모두 같은 화면에서 분석·검사·정리합니다.")
         self.scope_mode_label.setObjectName("muted")
         scope_layout.addWidget(self.scope_mode_label, 1)
         shell.addWidget(scope_bar)
+        # The unified ribbon owns visible navigation; retain these legacy
+        # controls for compatibility without duplicating the main toolbar.
+        scope_bar.hide()
         self._work_controls.extend((self.global_scope_button, self.single_scope_button))
         self.workspace_stack = QStackedWidget()
         shell.addWidget(self.workspace_stack, 1)
@@ -913,6 +919,8 @@ class MainWindow(QMainWindow):
         self.workspace.analysis_started.connect(lambda: self.set_busy(True, cancellable=True))
         self.workspace.analysis_finished.connect(self._workspace_finished)
         self.workspace.paths_changed.connect(self._save_workspace_roots)
+        self.workspace.tool_requested.connect(self._workspace_tool)
+        self.workspace.history_requested.connect(self._workspace_history)
         if not self._read_only_settings:
             try:
                 saved_roots = json.loads(self.settings.value("navigation/workspaceRoots", "[]"))
@@ -1175,18 +1183,24 @@ class MainWindow(QMainWindow):
             self.settings.setValue("navigation/workspaceRoots", json.dumps(self.workspace.root_model.paths, ensure_ascii=False))
 
     def _refresh_scope_controls(self):
-        if not hasattr(self, "workspace_stack"):
-            return
+        if not hasattr(self, "workspace_stack"): return
         single = self.workspace_mode == "single"
         self.global_scope_button.setChecked(not single)
-        self.single_scope_button.setChecked(single)
-        self.analysis_menu.setEnabled(single and not self._is_busy)
-        self.organize_menu.setEnabled(single and not self._is_busy)
-        self.history_action.setEnabled(single and not self._is_busy)
-        self.export_menu.setEnabled(single and not self._is_busy)
-        self.single_scope_button.setEnabled(not self._is_busy and bool(self.root))
-        self.scope_mode_label.setText("폴더 하나에서 검증한 결과로 정리·복원합니다." if single else
-                                      "체크한 폴더의 파일과 중복을 함께 확인합니다. 읽기 전용")
+        self.single_scope_button.setChecked(False)
+        for menu in (self.analysis_menu, self.organize_menu, self.export_menu): menu.setEnabled(not self._is_busy)
+        self.history_action.setEnabled(not self._is_busy)
+        self.single_scope_button.setEnabled(not self._is_busy and bool(self.workspace.root_model.paths))
+        self.scope_mode_label.setText("폴더 하나·여러 개 모두 같은 화면에서 분석·검사·정리합니다.")
+
+    def _workspace_tool(self, action):
+        {"settings": self.show_analysis_settings, "health": self.inspect_selected, "repair": self.repair_selected,
+         "logs": self.show_execution_logs, "help": self.show_help}.get(action, self.show_help)()
+
+    def _workspace_history(self, root):
+        if self._is_busy: return
+        self._start_task("원래 폴더의 작업 기록을 읽습니다…",
+            lambda worker: list_history(root, progress_detail=worker.report_detail),
+            lambda history: self._show_history(history, root=root))
 
     def _workspace_finished(self):
         self.set_busy(False)
@@ -1209,15 +1223,10 @@ class MainWindow(QMainWindow):
             self.workspace._pick_folders()
 
     def _return_to_single_scope(self):
-        if self.root and not self._is_busy:
-            self._open_workspace_folder(self.root)
+        if not self._is_busy: self.workspace._organize_selected()
 
     def _open_workspace_folder(self, path):
-        if self._is_busy or self._close_requested or self.workspace.is_running():
-            return
-        self.workspace_mode = "single"
-        self.workspace_stack.setCurrentWidget(self.single_content)
-        self._refresh_scope_controls()
+        if self._is_busy or self._close_requested: return
         self._open_folder(path)
 
     def _hidden_selected_count(self, paths=None) -> int:
@@ -1361,6 +1370,10 @@ class MainWindow(QMainWindow):
         return value_widget
 
     def set_busy(self, busy: bool, *, cancellable: bool = False):
+        if hasattr(self, "workspace"):
+            self.workspace.setEnabled(True)
+            if self.workspace_mode == "global" and not self.workspace.is_running():
+                self.workspace.set_external_busy(busy, cancellable=cancellable)
         self._is_busy = busy
         for control in self._work_controls:
             control.setEnabled(not busy)
@@ -1401,6 +1414,7 @@ class MainWindow(QMainWindow):
         worker = Worker(function, self)
         self._worker = worker
         worker.progress.connect(self.status_label.setText)
+        if self.workspace_mode == "global": worker.progress.connect(self.workspace.status.setText)
         worker.progress_detail.connect(self._on_progress_detail)
         worker.finished.connect(self._on_worker_finished)
         worker.start()
@@ -1456,6 +1470,7 @@ class MainWindow(QMainWindow):
     def _on_progress_detail(self, event):
         if self._worker is None or not isinstance(event, dict):
             return
+        if self.workspace_mode == "global": self.workspace._on_progress(event)
         try:
             previous = self._progress_snapshot
             snapshot = self._progress_tracker.update(event)
@@ -1500,6 +1515,8 @@ class MainWindow(QMainWindow):
         self.progress_time_label.setText(text)
 
     def cancel_task(self):
+        if self.workspace_mode == "global" and self.workspace.is_running():
+            self.workspace.cancel_analysis(); return
         if self._worker is not None and self._cancellable:
             self._worker.cancel_event.set()
             self.cancel_button.setEnabled(False)
@@ -1754,6 +1771,14 @@ class MainWindow(QMainWindow):
         self._refresh_scope_label()
         scope_changed = any(previous[key] != self.analysis_options[key] for key in ("exclude_patterns", "min_size", "max_size"))
         self._clear_match_results()
+        if self.workspace_mode == "global":
+            self.workspace._options.update({key: self.analysis_options[key] for key in ("exclude_patterns", "min_size", "max_size")})
+            self.workspace.exclusions.setText("; ".join(self.analysis_options["exclude_patterns"]))
+            self.workspace.minimum.setValue(self.analysis_options["min_size"] / 1024**2)
+            self.workspace._minimum_edited = False
+            if scope_changed: self.workspace.invalidate_after_change("검사 범위를 저장했습니다. 분석 시작으로 현재 범위를 확인하세요.")
+            else: self.workspace.status.setText("보존·유사 비교 설정을 저장했습니다. 현재 결과에서 사용할 수 있습니다.")
+            return
         if scope_changed and self.root:
             self._clear_analysis_cache()
             self.start_scan()
@@ -1826,24 +1851,13 @@ class MainWindow(QMainWindow):
         dialog.open()
 
     def _open_folder(self, path):
-        if self._is_busy or self._close_requested or self.workspace.is_running():
-            return
-        self._clear_analysis_cache()
-        self.workspace_mode = "single"
-        self.workspace_stack.setCurrentWidget(self.single_content)
-        self._refresh_scope_controls()
-        self._remember_next_scan = True
-        self.root = str(Path(path).expanduser().absolute())
-        self.folder_input.setText(self.root)
-        self.model.set_entries([])
-        self.scan_result = None
-        self.scan_complete = False
-        self.groups = []
-        self.match_kind = None
-        self._clear_match_tree()
-        self.views.setCurrentIndex(0)
-        self.views.setTabVisible(1, False)
-        self.start_scan()
+        if self._is_busy or self._close_requested or self.workspace.is_running(): return
+        self.show_multiroot()
+        self.workspace.add_paths([path])
+        target = str(Path(path).expanduser().absolute())
+        self.workspace.root_model.checked_rows = {index for index, root in enumerate(self.workspace.root_model.paths) if root == target}
+        self.workspace.root_model.layoutChanged.emit()
+        self.workspace.start_analysis()
 
     def start_scan(self):
         if self.workspace_mode == "global":
@@ -1924,13 +1938,16 @@ class MainWindow(QMainWindow):
         self._refresh_action_hint()
 
     def selected_paths(self) -> list[str]:
+        if self.workspace_mode == "global": return self.workspace.checked_file_paths()
         return sorted(self.model.checked, key=self.model.path_rows.__getitem__)
 
     def select_visible(self):
+        if self.workspace_mode == "global": return self.workspace.mark_visible()
         self.model.set_checked([self.model.entries[self.proxy.mapToSource(self.proxy.index(row, 0)).row()].path
                                 for row in range(self.proxy.rowCount())], replace=False)
 
     def clear_selection(self):
+        if self.workspace_mode == "global": return self.workspace.clear_marks()
         self.model.set_checked([])
 
     def _selection_changed(self):
@@ -1949,9 +1966,14 @@ class MainWindow(QMainWindow):
         self._refresh_action_hint()
 
     def _require_scan(self, selection=False) -> bool:
-        if self.workspace_mode != "single":
-            QMessageBox.information(self, "통합 분석은 읽기 전용", "왼쪽에서 폴더 하나를 선택한 뒤 ‘이 폴더에서 정리’를 누르세요. 해당 폴더를 별도로 분석한 결과로 정리합니다.")
-            return False
+        if self.workspace_mode == "global":
+            if not self.workspace._actionable():
+                QMessageBox.information(self, "폴더 분석 필요", "현재 폴더를 먼저 분석하세요. 작업 후에는 새 분석이 필요합니다.")
+                return False
+            if selection and not self.workspace.checked_file_paths():
+                QMessageBox.information(self, "파일 선택 필요", "파일 이름 앞의 체크박스로 처리할 파일을 선택하세요.")
+                return False
+            return True
         if not self.scan_result or not self.scan_complete:
             QMessageBox.information(self, "폴더 분석 필요", "폴더를 선택하고 분석을 완료한 뒤 사용하세요.")
             return False
@@ -1961,6 +1983,7 @@ class MainWindow(QMainWindow):
         return True
 
     def analyze_duplicates(self):
+        if self.workspace_mode == "global": return self.workspace.show_duplicates()
         if not self._require_scan():
             return
         files = list(self.model.entries)
@@ -1974,6 +1997,7 @@ class MainWindow(QMainWindow):
                          cancellable=True)
 
     def analyze_similar(self):
+        if self.workspace_mode == "global": return self.workspace.analyze_similar()
         if not self._require_scan():
             return
         files = list(self.model.entries)
@@ -2111,6 +2135,7 @@ class MainWindow(QMainWindow):
         self.model.set_checked(checked)
 
     def select_duplicate_candidates(self):
+        if self.workspace_mode == "global": return self.workspace.mark_copies()
         self._choose_by_retention("first")
 
     def _retention_rule_changed(self):
@@ -2118,6 +2143,7 @@ class MainWindow(QMainWindow):
         self._persist_analysis_options()
 
     def select_by_retention(self):
+        if self.workspace_mode == "global": return self.workspace.mark_copies()
         self._choose_by_retention(self.retention_rule.currentData() or "first")
 
     def _choose_by_retention(self, rule: str):
@@ -2155,6 +2181,7 @@ class MainWindow(QMainWindow):
                             selection={"paths": self.selected_paths(), "retention": self.last_retention})
 
     def export_match_report(self):
+        if self.workspace_mode == "global": return self.workspace._export()
         if not self._require_scan():
             return
         path, selected_filter = QFileDialog.getSaveFileName(self, "새 분석 결과 보고서 저장", "folder-organizer-report.html", "HTML 보고서 (*.html);;JSON 보고서 (*.json)")
@@ -2170,6 +2197,7 @@ class MainWindow(QMainWindow):
                          lambda saved: self.status_label.setText(f"비교 보고서 저장 완료 · {saved}"))
 
     def compare_current_group(self):
+        if self.workspace_mode == "global": return self.workspace.compare_current()
         if not self._require_scan():
             return
         item = self.match_tree.currentItem()
@@ -2211,7 +2239,7 @@ class MainWindow(QMainWindow):
     def compare_paths(self, left: str, right: str):
         if left == right:
             return
-        entries = {entry.path: entry for entry in self.model.entries}
+        entries = self.workspace._entries_by_path if self.workspace_mode == "global" else {entry.path: entry for entry in self.model.entries}
         if left not in entries or right not in entries:
             QMessageBox.information(self, "다시 분석 필요", "비교할 파일이 현재 분석 결과에 없습니다. 폴더를 다시 분석하세요.")
             return
@@ -2317,6 +2345,7 @@ class MainWindow(QMainWindow):
         return default_rules("type")
 
     def show_classification(self, *, preset=None):
+        if self.workspace_mode == "global": return self.workspace.show_rules(preset)
         if not self._require_scan():
             return
         dialog = ClassificationDialog(default_rules(preset) if preset else self._classification_rules(), self)
@@ -2334,6 +2363,7 @@ class MainWindow(QMainWindow):
             lambda plan: self._show_preview(plan, require_confirmation=True))
 
     def keep_first_delete(self):
+        if self.workspace_mode == "global": return self.workspace.keep_first()
         if self._fast_removal_completed or self._is_busy:
             return
         if not self._require_scan():
@@ -2390,6 +2420,7 @@ class MainWindow(QMainWindow):
         self._refresh_guidance()
 
     def classify_duplicates(self):
+        if self.workspace_mode == "global": return self.workspace.mark_copies()
         if not self._require_scan():
             return
         scan = self.scan_result
@@ -2413,11 +2444,13 @@ class MainWindow(QMainWindow):
                          lambda plan: self._show_preview(plan, require_confirmation=True), cancellable=True)
 
     def preview_selected(self):
+        if self.workspace_mode == "global": return self.workspace.preview_action(self.action_combo.currentData()[0])
         if self._require_scan(selection=True):
             mode, basis = self.action_combo.currentData()
             self._build_preview(mode, date_basis=basis)
 
     def assume_duplicates(self):
+        if self.workspace_mode == "global": return self.workspace.preview_action("quarantine")
         if not self._require_scan(selection=True):
             return
         answer = QMessageBox.warning(
@@ -2542,7 +2575,10 @@ class MainWindow(QMainWindow):
 
     def reveal_selected(self):
         paths = self.selected_paths()
-        if not paths and self.table.currentIndex().isValid():
+        if not paths and self.workspace_mode == "global":
+            value = self.workspace.selected_snapshot()
+            paths = [value["path"]] if value else []
+        if not paths and self.table.currentIndex().isValid() and self.workspace_mode == "single":
             row = self.proxy.mapToSource(self.table.currentIndex()).row()
             paths = [self.model.entries[row].path]
         if paths:
@@ -2553,6 +2589,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "위치 열기", "먼저 폴더를 선택하세요.")
 
     def export_csv(self):
+        if self.workspace_mode == "global": return self.workspace.export_csv()
         if not self._require_scan():
             return
         path, _ = QFileDialog.getSaveFileName(self, "새 파일로 목록 저장 (덮어쓰기 없음)", str(Path.home() / "folder-organizer.csv"), "CSV 파일 (*.csv)")
@@ -2634,13 +2671,14 @@ class MainWindow(QMainWindow):
                          self._repair_done)
 
     def _repair_done(self, results):
+        if self.workspace_mode == "global":
+            self._show_details("복구본 생성 결과", results); self.workspace.invalidate_after_change("복구본을 만들었습니다. 다음 작업 전에 분석하세요."); return
         self._show_details("복구본 생성 결과", results)
         self.start_scan()
 
     def show_history(self):
-        if self.workspace_mode != "single":
-            QMessageBox.information(self, "폴더별 작업 기록", "왼쪽에서 폴더를 선택하고 ‘이 폴더에서 정리’로 전환한 뒤 기록을 확인하세요.")
-            return
+        if self.workspace_mode == "global":
+            return self.workspace.show_history()
         if self._history_dialog is not None and self._history_dialog.isVisible():
             self._history_dialog.raise_()
             self._history_dialog.activateWindow()
@@ -2653,12 +2691,12 @@ class MainWindow(QMainWindow):
                          lambda worker: list_history(root, progress_detail=worker.report_detail),
                          self._show_history)
 
-    def _show_history(self, history: list[dict]):
+    def _show_history(self, history: list[dict], *, root=None):
         # A journal contains filesystem identifiers that may exceed QVariant's
         # signed 64-bit range on Windows. Keep records in the Python model only.
         dialog = HistoryDialog(history, self)
         self._history_dialog = dialog
-        root = self.root
+        root = root or self.root
 
         def request_undo(operation_id: str):
             record = next((record for record in history if record.get("id") == operation_id), None)
@@ -2675,7 +2713,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, lambda: self._start_task(
                 "파일을 원래 위치로 복원하고 있습니다…",
                 lambda worker: undo_operation(root, operation_id, progress_detail=worker.report_detail),
-                self._operation_done))
+                self._workspace_restore_done if self.workspace_mode == "global" else self._operation_done))
 
         def request_compact(operation_id: str):
             dialog.accept()
@@ -2695,6 +2733,10 @@ class MainWindow(QMainWindow):
         dialog.compact_requested.connect(request_compact)
         dialog.finished.connect(closed)
         dialog.open()
+
+    def _workspace_restore_done(self, result):
+        self._show_details("원래 폴더 복원 결과", result)
+        self.workspace.invalidate_after_change("복원 결과를 기록했습니다. 현재 목록은 이전 분석 시점이며 다음 작업 전에 분석하세요.")
 
     def _show_compaction_preview(self, plan):
         if not plan.get("candidate_count"):
@@ -2786,6 +2828,7 @@ class MainWindow(QMainWindow):
         dialog.open()
 
     def merge_current_group(self):
+        if self.workspace_mode == "global": return self.show_merge(self.workspace.merge_paths())
         if not self._require_scan():
             return
         item = self.match_tree.currentItem()
@@ -2809,7 +2852,15 @@ class MainWindow(QMainWindow):
         if self._merge_dialog is not None and self._merge_dialog.isVisible():
             self._merge_dialog.raise_()
             return
-        dialog = MergeDialog(self.root, paths, self)
+        session = self.workspace.session if self.workspace_mode == "global" else None
+        preview_builder = None
+        merge_root = self.root
+        if session is not None:
+            from .workspace_actions import build_workspace_merge_preview
+            merge_root = str(Path(paths[0]).parent)
+            def preview_builder(_display_root, selected_paths, **options):
+                return build_workspace_merge_preview(session, selected_paths, **options)
+        dialog = MergeDialog(merge_root, paths, self, preview_builder=preview_builder)
         self._merge_dialog = dialog
 
         def execute(plan):
@@ -2817,8 +2868,12 @@ class MainWindow(QMainWindow):
             self._merge_execute_pending = True
             def start():
                 self._merge_execute_pending = False
-                self._start_task("겹치는 내용을 병합하고 새 파일을 검증하고 있습니다…",
-                                 lambda worker: execute_merge(plan, progress_detail=worker.report_detail), self._merge_done)
+                def task(worker):
+                    if session is not None:
+                        from .workspace_actions import execute_workspace_merge
+                        return execute_workspace_merge(session, plan, cancel=worker.cancel_event, progress_detail=worker.report_detail)
+                    return execute_merge(plan, progress_detail=worker.report_detail)
+                self._start_task("겹치는 내용을 병합하고 새 파일을 검증하고 있습니다…", task, self._merge_done)
             QTimer.singleShot(0, start)
 
         def closed(_result):
@@ -2831,6 +2886,10 @@ class MainWindow(QMainWindow):
         dialog.open()
 
     def _merge_done(self, result):
+        if self.workspace_mode == "global":
+            self.workspace._operation_done(result)
+            self._show_details("내용 병합 결과", result)
+            return
         self._clear_analysis_cache()
         self.scan_complete = False
         self._show_details("내용 병합 결과", result)

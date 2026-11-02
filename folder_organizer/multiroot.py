@@ -108,6 +108,7 @@ def scan_folders(
     min_size: int = 0, max_size: int | None = None, workers: int = 2,
     duplicates: bool = True, cancel: Event | None = None,
     progress_detail: Callable[[dict], None] | None = None,
+    _live_groups: list | None = None,
 ) -> MultiScanResult:
     """Inventory selected folders and optionally compare their exact contents.
 
@@ -259,6 +260,8 @@ def scan_folders(
         analysis: dict = {}
         groups = find_duplicates(result.files, cancel=cancel, report=analysis,
             progress_detail=lambda event: emit(None, event, terminal=bool(event.get("terminal"))))
+        if _live_groups is not None:
+            _live_groups.extend(groups)
         result.duplicate_seconds = time.monotonic() - duplicate_started
         result.duplicate_analysis = {"requested": True, **analysis}
         result.cancelled = result.cancelled or bool(analysis.get("cancelled"))

@@ -1,0 +1,55 @@
+name: Workspace action changes only
+run-name: Single and multi-folder actions · new Windows cases only · ${{ github.sha }}
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  python:
+    name: New Python action workspace on Windows
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: '1'
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install application and new-case runner
+        run: python -m pip install -e ".[dev]"
+      - name: Only new action and UI integration cases
+        run: python -m pytest -q tests/test_workspace_actions_next.py tests/test_workspace_actions_ui_next.py tests/test_workspace_flow_next.py --junitxml=workspace-python-new.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workspace-actions-python-new
+          path: workspace-python-new.xml
+  rust:
+    name: New Rust action workspace on Windows
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust compiler
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust-app/target
+          key: windows-workspace-actions-1.99.1-${{ hashFiles('rust-app/Cargo.lock', 'rust-app/Cargo.toml', '.cargo/config.toml') }}
+          restore-keys: |
+            windows-workspace-actions-1.99.1-
+            windows-rust-static-1.99.1-
+      - name: Only new multi-root action integration target
+        run: cargo +1.99.1 test --manifest-path rust-app/Cargo.toml --locked --test workspace_actions_next
+      - name: Only new ribbon and action UI cases
+        run: cargo +1.99.1 test --manifest-path rust-app/Cargo.toml --locked --features gui --lib next_workspace
+      - name: Compile changed Windows GUI
+        run: cargo +1.99.1 check --manifest-path rust-app/Cargo.toml --locked --features gui --bins
