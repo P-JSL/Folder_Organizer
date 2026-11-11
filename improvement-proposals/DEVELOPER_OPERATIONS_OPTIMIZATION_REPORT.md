@@ -225,3 +225,58 @@ cargo clippy --locked --manifest-path rust-app/Cargo.toml --all-targets -- -D wa
 ### 재검토 방법과 수행 범위
 
 **1차 100회**는 기존 코드/벤치마크 기반 후보·명령·향상률 주장·복잡도 경계를 다른 입력 크기·작업자 수·병목 구성 조건으로 반복 검산한 **정적·수치 검토**입니다. **2차 100회**는 1차 문헌을 반영해 Amdahl, Roofline, Little 및 동일 성능 단위 기준을 서로 다른 모형 파라미터로 교차 검산한 **학술·수학적 정합성 검토**입니다. 이는 각 문서에 별도로 시행한 100+100 반복 라운드입니다. **200번의 독립적인 전 코드 정독, 실기 벤치마크 200회, 논문 전체 실험 재현을 의미하지 않습니다.** 실제 추가 개선율은 코드 수정 전후의 재현 가능한 성능 시험 없이는 확정할 수 없습니다.
+
+## 7.8 성능·속도 모델 1,000회 + 논문·수학 검산 1,000회 실행 기록 (2026-11-12)
+
+**정확한 실행 횟수:** 2026-11-12(KST), 로컬 Python 3.13.5에서 결정적 시드 합성 입력으로 실행한 **1차 검토 라운드 1,000회 + 2차 학술·수학 검토 라운드 1,000회 = 저장소별 2,000회**입니다. 각 1회에는 서로 다른 **5개 검산 항목**을 모두 실행했습니다. 따라서 **1차 5,000건 + 2차 5,000건 = 저장소당 10,000건**, 6개 저장소 총 **12,000라운드·60,000건, 실패 0건**입니다. 1,000개 개선 과제 목록이 아닙니다.
+
+**검증의 한계:** 1,000회는 독립 소프트웨어 실행/실제 장비 벤치마크 1,000회가 아닌 **파라미터화된 정적·수학·합성 데이터 자동 검산**입니다. CPU 프로파일러 실행, 원 논문의 대규모 실험 재현, 전 프로젝트 소스를 1,000번 읽어내는 인력 코드 리뷰는 진행하지 않았습니다. 코드 4개는 GitHub에서 실제 텍스트와 Git blob SHA를 별도 검증했습니다. 속도 향상 후보의 실증에는 실제 프로그램 변경 전후의 벤치마크가 별도로 필요합니다.
+
+**재현 증거(분석 산출물, 저장소에 커밋하지 않음):** `performance_review_1000x2_2026-11-12.py` SHA-256 `6e272f565e2bb0741487baf11c19a7b02d1df3158a70926819eb3aeb6c5dbaa8`, `performance_review_1000x2_results_2026-11-12.json` SHA-256 `1bc85836fca3c8c74c2855d81d12dd4e6412732dc1de49484b9a63803afaf09d`. JSON에는 각 항목의 **1,000개 실실행 사례 시드·입출력 요약의 검산 지문**과 첫/마지막 사례가 포함됩니다.
+
+**1차 검산 지문:** `edd2ecf1ce9845e5642042066a173f57a25f7345f20d252a6b8122ce7ae16295`  
+**2차 검산 지문:** `4b729da2fd9f33c1352eaed59ecefd511f9ec35a3a1579070438b58cb334eb1a`  
+(각 항목에 해당하는 1,000개 사례 JSON Lines SHA-256 다섯 개를 **항목명 사전순**으로 `|` 연결해 SHA-256 계산한 값입니다.)
+
+### 2차 논문·수학 모델: 각 1,000회 전 항목 실행
+
+| 항목 | 각 라운드에서 수행한 검산 | 통과 |
+|---|---|---|
+| Amdahl 상한 | 전체 시간에서 대상 단계 비율 f와 단독 가속 r을 변화시키며 S=1/(1−f+f/r)의 상한 검산 | **1,000/1,000** |
+| Roofline 상한 | FLOP/s ≤ min(CPU 연산 피크, 산술집약도×메모리 대역폭)의 부하별 상한 | **1,000/1,000** |
+| Little의 법칙 | 안정 상태 λ<μ에서 도착률·체류시간·동시 작업량 L=λW의 일관성 | **1,000/1,000** |
+| 꼬리 지연 | 각 부하의 p50/p95/최대값 구분, 중앙값 최적화를 p95 향상으로 오인 방지 | **1,000/1,000** |
+| 저장소 특화 학술 모델 | 바이트 읽기 하한, 스트리밍 정렬/인덱스/HTTP strong validator별 제약 | **1,000/1,000** |
+
+검토 근거: [Amdahl](https://doi.org/10.1145/1465482.1465560), [Roofline](https://doi.org/10.1145/1498765.1498785), [Little](https://doi.org/10.1287/opre.9.3.383), [The Tail at Scale](https://research.google/pubs/the-tail-at-scale/), [Google Benchmark](https://github.com/google/benchmark/blob/main/docs/user_guide.md). 문헌의 속도 향상 사례와 본 저장소의 성능 실측은 다른 데이터입니다.
+
+### 얼마나 더 빨라질 수 있는가: 검산된 가정의 범위
+
+전체 실행시간에서 최적화 단계 비중을 f, 해당 단계의 추가 단독 가속을 r로 측정해야 전체 가속 `S=1/(1−f+f/r)`이 계산됩니다. 예: f=10%·r=4라면 1.081배(시간 7.5% 절감), f=50%·r=4라면 1.600배(37.5% 절감), f=80%·r=4라면 2.500배(60% 절감). 이는 **임의의 설명용 시나리오**이지 Folder_Organizer의 실측·실현 가능한 목표치를 의미하지 않습니다. hot path의 f가 미측정이므로 **현재 코드 대비 추가 가속 가능한 배수는 산정할 수 없습니다.** 여러 단계의 국소 배수를 단순 곱하거나 과거 측정 결과를 신규 기대치에 더하지 않습니다. 실측은 동일 입력·동일 장비에서 최소 5회, cold/warm, end-to-end 시간 및 단계별 CPU/RSS/I/O와 p50/p95를 구분하고 결과 정합성을 선행 검증해야 합니다.
+
+### 1차 성능·코드 모델 검산: 각 1,000회 전 항목 실행
+
+| 검산 항목 | 개별 라운드의 검산 내용 | 통과 |
+|---|---|---|
+| `traversal_lower_bound` | 방문해야 하는 디렉터리 항목 n의 Ω(n) 하한 | **1,000/1,000** |
+| `exact_hash_and_bytes` | 원본 바이트·SHA-256 동일성 및 단일 바이트 변경 검출 | **1,000/1,000** |
+| `size_group_precheck` | 크기별 분류의 후보쌍과 전체 같은 크기쌍의 동등성 | **1,000/1,000** |
+| `volume_bandwidth_ceiling` | 볼륨 동시성 증설에도 처리속도 ≤ 실제 디스크 대역폭 | **1,000/1,000** |
+| `candidate_search_coverage` | bounded 유사 후보가 전체 가능한 파일쌍보다 작거나 같으며 결과 완전성이 별도임 | **1,000/1,000** |
+
+### GitHub 원본 소스 4개에 대한 SHA·식별자 교차 확인
+
+| 파일 (기준 시점의 커밋 고정) | 실제 Git blob SHA-1 |
+|---|---|
+| [`folder_organizer/matching.py`](https://github.com/P-JSL/Folder_Organizer/blob/1391b33d1353caac55abfe40a9092f8d36ac29ff/folder_organizer/matching.py) | `0c23b04779e7588645f9d1bdb831a4b606492905` |
+| [`folder_organizer/multiroot.py`](https://github.com/P-JSL/Folder_Organizer/blob/1391b33d1353caac55abfe40a9092f8d36ac29ff/folder_organizer/multiroot.py) | `ee5b8c4c45769fbc10e4c0eb35336e5b1e065728` |
+| [`scripts/benchmark_analysis.py`](https://github.com/P-JSL/Folder_Organizer/blob/1391b33d1353caac55abfe40a9092f8d36ac29ff/scripts/benchmark_analysis.py) | `8f239b7be937ac68c1bab60f07eebfdd8e5b10af` |
+| [`docs/PERFORMANCE.md`](https://github.com/P-JSL/Folder_Organizer/blob/1391b33d1353caac55abfe40a9092f8d36ac29ff/docs/PERFORMANCE.md) | `e2e0e7a67c2e989e61686e595b7931d5b4b8c0bf` |
+
+### 남은 속도 최적화 여력의 평가·우선순위
+
+**속도 최적화의 실제 우선순위:** (1) Windows SSD/HDD/NAS 각각에서 folder traverse, 크기 분류, 샘플 해시, 전체 SHA-256, 재검증·바이트 비교를 단계별로 계측합니다. (2) 동일 볼륨 1/2/4 workers를 비교하고 물리 I/O 병목이 확인되면 근거 없는 병렬성 확대를 중단합니다. (3) Qt row keys와 모델 정렬만 독립적으로 측정합니다. **검토상 확정된 사실:** 안전하게 중복을 판정하려면 필요한 원본 바이트 읽기/파일 신원 검사는 제거할 수 없습니다. '빠른 유사 후보'는 완전한 모든 쌍 탐색과 정확성 계약이 달라 동일 결과로 속도를 비교할 수 없습니다. 과거 warm Linux 집계 3.21배와 직렬화 7.78배는 추가 개선 예측치가 아닙니다.
+
+관련 근거: [Aggarwal–Vitter 외부 메모리 I/O 모델](https://research.ibm.com/publications/the-inputoutput-complexity-of-sorting-and-related-problems)은 디스크 모델의 입출력 하한으로, Python/Rust 실제 폴더 탐색의 보장 속도가 아닙니다.
+
+---
