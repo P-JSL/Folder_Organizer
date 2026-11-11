@@ -169,3 +169,27 @@ cargo clippy --locked --manifest-path rust-app/Cargo.toml --all-targets -- -D wa
 ```
 
 **측정 로그:** `files/s`, `full_hash_bytes`, `byte_comparison_bytes`, sample/reopen 횟수, 볼륨별 `MB/s`·busy%, 작업자 수, Peak RSS, 취소 후 중단 지연, 저널 검증·복원 결과 SHA. **즉시 원복:** 정상 그룹 누락, 하드링크 중복 반영, 변경 중인 파일의 정상 판정, `delete_files`/작업 기록 손상, 강제 종료 후 복원 불가, 다른 루트의 파일 변경.
+
+
+## 7.6 추가 보완 과제 — 재현 가능한 성능 근거·이중 구현 일치·복구 증빙 (2026-11-11)
+
+기존 IMP-F01~F05는 해시/I/O와 사용자 화면 효율 중심입니다. 추가로 **이미 존재하는 벤치마크를 활용하는 방법**, Python/Rust 간 계약 동등성, 보관·복구 신뢰성을 변경 승인 조건으로 연결해야 합니다.
+
+### IMP-F06 · 기존 스케일링 벤치마크의 기준선·재현성 체계화 (P1)
+
+- **확인 근거:** [scripts/benchmark_analysis.py L88-L161, L416-L457](https://github.com/P-JSL/Folder_Organizer/blob/f74aff3e3e3f56a95fde15cb24d35ba78fee5b59/scripts/benchmark_analysis.py#L88-L161)는 일회용 synthetic fixture와 중복/스케일링, read byte 계측을 이미 지원합니다. 새 측정기를 만들기 전에 재사용합니다.
+- **실행 예시:** 개발 의존성 설치 후 python scripts/benchmark_analysis.py --suite scaling --counts 1000 2000 --repeats 5 실행. 동일 입력을 사용하는 작업 트리/기준 커밋 비교는 --compare-revision 값에 **검증된 기존 커밋 SHA**만 지정합니다. recovery-payload, gui-keys, duplicate-preview는 서로 다른 단계 측정이므로 결과를 합산해 속도 개선율로 표시하지 않습니다.
+- **개선 절차:** 변경 전·후 source SHA, Python 버전, 디스크 유형/캐시 상태, 입력 건수, 반복 중앙값·요청 read bytes·Peak RSS를 결과에 함께 저장합니다. 읽은 바이트 수는 OS의 실제 물리 I/O와 다르며, 페이지 캐시가 따뜻한 결과로 일반 NAS/대형 HDD 성능을 단정하지 않습니다.
+- **합격/원복:** 결과 그룹/누락 경고/파일 원본 SHA가 같으면서 반복 실행의 중앙값이 개선되는 경우에만 후보 승인. 단일 시도 수치만 유리한 변경은 보류합니다.
+
+### IMP-F07 · Python/Rust CLI 출력 동등성과 릴리스 증거 연계 (P1 운영)
+
+- **확인 근거:** [scripts/benchmark_editions_v070.py L1-L11, L329-L405](https://github.com/P-JSL/Folder_Organizer/blob/f74aff3e3e3f56a95fde15cb24d35ba78fee5b59/scripts/benchmark_editions_v070.py#L329-L405)은 독립 프로세스로 두 판의 공통 보고서 계약·실행 시간을 비교하고 원본 파일 변경이 없음을 확인합니다. [.github/workflows/dual-release.yml](https://github.com/P-JSL/Folder_Organizer/blob/f74aff3e3e3f56a95fde15cb24d35ba78fee5b59/.github/workflows/dual-release.yml)과 [promote-verified.yml](https://github.com/P-JSL/Folder_Organizer/blob/f74aff3e3e3f56a95fde15cb24d35ba78fee5b59/.github/workflows/promote-verified.yml)은 배포 단계가 분리됩니다.
+- **개선 절차:** 실제 Windows 패키지 기준 python scripts/benchmark_editions_v070.py --require-windows --python-command '["dist/FolderOrganizer/FolderOrganizer.exe","--cli"]' --rust-command '["dist/FolderOrganizerRust/FolderOrganizerRustCLI.exe"]' --output editions-benchmark.json 실행을 검증표에 포함합니다. Windows PowerShell에서 따옴표 전달이 달라지면 스크립트의 도움말에 맞춰 수정합니다. 산출 JSON에는 각판 실행 파일 SHA/커밋/공통 스키마/그룹/시각 정밀도 비교 결과를 묶습니다.
+- **검증/원복:** 실측 속도가 우수해도 결과 그룹, 제외 패턴, 생성·수정일 정밀도, action_authority=false 등의 의미가 달라지면 두 판 동등성 미충족으로 반려합니다. 테스트가 사용한 임시 소스 트리를 고객 데이터 경로로 바꾸지 않습니다.
+
+### IMP-F08 · 파일 삭제·압축 보관·복원을 릴리스 차단형 안전성 증거로 관리 (P1 데이터 보호)
+
+- **확인 근거:** [tests/test_recovery_compaction.py](https://github.com/P-JSL/Folder_Organizer/blob/f74aff3e3e3f56a95fde15cb24d35ba78fee5b59/tests/test_recovery_compaction.py)에는 packed payload 복원, 원본과 충돌, 객체 손상, 저널 실패 및 구버전 기록 호환 시험이 있습니다. [tests/test_multiroot_extended.py](https://github.com/P-JSL/Folder_Organizer/blob/f74aff3e3e3f56a95fde15cb24d35ba78fee5b59/tests/test_multiroot_extended.py)는 부분 실패와 다중 루트의 읽기 전용 계약을 확인합니다.
+- **개선 절차:** 최적화 PR마다 python -m pytest -q tests/test_recovery_compaction.py tests/test_multiroot_extended.py 를 독립 실행하고, Windows 실제 배포본에서 ① 안전한 삭제 ② 대상 파일 재생성 충돌 ③ 복원 ④ 강제 중단 후 저널 재시작 ⑤ Python/Rust 교차 버전 확인을 수행합니다. 자동화된 테스트의 수행 범위와 수동 리허설 범위를 구분합니다.
+- **합격/원복:** 원본이 변경되었는데도 이전 분석 proof로 삭제되는 경로가 0건이어야 하며, 보관 대상의 SHA 불일치나 partial undo 은폐가 있으면 즉시 반려합니다. 속도 개선을 위해 파일 identity·동기화·저널 내구성 검사를 생략하지 않습니다.
