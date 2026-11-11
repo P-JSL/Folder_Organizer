@@ -193,3 +193,35 @@ cargo clippy --locked --manifest-path rust-app/Cargo.toml --all-targets -- -D wa
 - **확인 근거:** [tests/test_recovery_compaction.py](https://github.com/P-JSL/Folder_Organizer/blob/f74aff3e3e3f56a95fde15cb24d35ba78fee5b59/tests/test_recovery_compaction.py)에는 packed payload 복원, 원본과 충돌, 객체 손상, 저널 실패 및 구버전 기록 호환 시험이 있습니다. [tests/test_multiroot_extended.py](https://github.com/P-JSL/Folder_Organizer/blob/f74aff3e3e3f56a95fde15cb24d35ba78fee5b59/tests/test_multiroot_extended.py)는 부분 실패와 다중 루트의 읽기 전용 계약을 확인합니다.
 - **개선 절차:** 최적화 PR마다 python -m pytest -q tests/test_recovery_compaction.py tests/test_multiroot_extended.py 를 독립 실행하고, Windows 실제 배포본에서 ① 안전한 삭제 ② 대상 파일 재생성 충돌 ③ 복원 ④ 강제 중단 후 저널 재시작 ⑤ Python/Rust 교차 버전 확인을 수행합니다. 자동화된 테스트의 수행 범위와 수동 리허설 범위를 구분합니다.
 - **합격/원복:** 원본이 변경되었는데도 이전 분석 proof로 삭제되는 경로가 0건이어야 하며, 보관 대상의 SHA 불일치나 partial undo 은폐가 있으면 즉시 반려합니다. 속도 개선을 위해 파일 identity·동기화·저널 내구성 검사를 생략하지 않습니다.
+
+## 7.7 파일 탐색·해시·비교의 추가 속도 개선 여력 — 2단계 반복 검토 (2026-11-11)
+
+### 이미 구현된 것과 추가 여력의 분리
+
+[docs/PERFORMANCE.md](https://github.com/P-JSL/Folder_Organizer/blob/834fc46cb7762c41838bf999d4e379abf8d142ac/docs/PERFORMANCE.md)와 [docs/INVENTORY_BENCHMARK_0.6.0.json](https://github.com/P-JSL/Folder_Organizer/blob/834fc46cb7762c41838bf999d4e379abf8d142ac/docs/INVENTORY_BENCHMARK_0.6.0.json)에는 과거 warm Linux fixture 기준 20,000 항목 집계 **0.105987→0.033013초(3.21배)**, JSON 직렬화 **0.066051→0.008490초(7.78배)**가 남아 있습니다. 이는 **이전 버전 대비 해당 단계의 과거 개선**, Windows/NAS/현행 통합 실측 또는 향후 추가 가속치가 아닙니다. [MATCHING_EXTENDED_BENCHMARK.json](https://github.com/P-JSL/Folder_Organizer/blob/834fc46cb7762c41838bf999d4e379abf8d142ac/docs/MATCHING_EXTENDED_BENCHMARK.json)의 중복 비교 요청바이트 72,351,744→0은 **특정 합성 후보의 중복 바이트 읽기 감소**이지 전체 파일 해시 검사 생략이 아닙니다.
+
+### 추가 성능 후보 및 수학적 제약
+
+| 우선 | 대상 코드/단계 | 가능한 개선 | 상한과 조건 |
+|---|---|---|---|
+| 1 | [folder_organizer/matching.py](https://github.com/P-JSL/Folder_Organizer/blob/f74aff3e3e3f56a95fde15cb24d35ba78fee5b59/folder_organizer/matching.py) exact hash | 같은 물리 볼륨별 읽기 동시성 1/2/4, 다른 물리 볼륨끼리 병렬 처리. Hash를 계산하기 전에 크기/경량 샘플로 제외하는 현행 단계 재사용 | 해시가 필요한 전체 B 바이트는 최소 한 번 읽어야 하므로 T≥B/R_eff. 같은 HDD 병렬화는 seek 증가로 느려질 수 있음 |
+| 2 | [rust-app/src/core.rs](https://github.com/P-JSL/Folder_Organizer/blob/f74aff3e3e3f56a95fde15cb24d35ba78fee5b59/rust-app/src/core.rs) duplicate scan | 크기 그룹·해시 경로별 불필요한 파일 reopen/metadata calls를 계측한 뒤 한정 cache | 파일변경 시 오판 방지를 위한 identity와 최종 바이트 검사 보존 |
+| 3 | [folder_organizer/multiroot.py](https://github.com/P-JSL/Folder_Organizer/blob/f74aff3e3e3f56a95fde15cb24d35ba78fee5b59/folder_organizer/multiroot.py) | 동일 경로가 여러 루트에 포함된 경우 중복 walk/해시를 줄이는 현행 스케줄러 효과 재측정 | 이미 overlap 방지 구현이 있어 중복 도입 금지; 볼륨 단위 I/O 대역폭 포화 구간에서는 worker 증설 무익 |
+| 4 | [folder_organizer/ui.py](https://github.com/P-JSL/Folder_Organizer/blob/f74aff3e3e3f56a95fde15cb24d35ba78fee5b59/folder_organizer/ui.py) | 수만 행에서 Qt model의 visible-range만 렌더·정렬 key 캐시; 현재 정렬 key cache 중복 구축 금지 | row render p95만 개선, 디스크 hashing 속도는 그대로 |
+| 5 | [folder_organizer/matching.py](https://github.com/P-JSL/Folder_Organizer/blob/f74aff3e3e3f56a95fde15cb24d35ba78fee5b59/folder_organizer/matching.py) similarity | 이미 bounded candidate 인덱스 존재; 후보 선택의 CPU/메모리 비용 분석 후 특정 key 압축 | 전체 쌍 O(n²)과 후보 O(n) 근사는 **결과 완전성이 다름**. 동등 기능 개선으로 가속률 비교 금지 |
+
+**성능 하한:** 파일 n개 디렉터리 순회에는 적어도 Ω(n), 바이트 동일성 확인에는 확인할 바이트 B의 읽기 비용 Ω(B)가 남습니다. 파일시스템 cache warm/cold, HDD 랜덤 I/O, NAS 왕복 지연, AV 실시간 검사 등은 같은 코드에서도 큰 편차를 냅니다. **파일을 덜 읽어서 빨라지더라도 최종 동등성 증명을 생략하면 채택 불가**입니다.
+
+**재현:** python scripts/benchmark_analysis.py --suite scaling --counts 1000 2000 --repeats 5. Windows Python/Rust는 scripts/benchmark_editions_v070.py의 실제 패키지·동일 fixture를 사용합니다. 새 보고서는 파일 수/s, 처리 MiB/s, physical disk read와 requested bytes 구분, hash/s, peak RSS, UI frame p95를 기록해야 합니다. **현행 대비 추가 속도 배수: 미측정**.
+
+### 논문·수학 모델에 따른 추가 개선 상한
+
+**Amdahl:** 전체 기존 시간 중 최적화할 단계 비율 f, 해당 단계 가속 r이면 전체 S=1/(1−f+f/r). 가령 f=0.10/r=4 → S=1.081배(전체 시간 7.5% 단축), f=0.50/r=4 → 1.600배(37.5% 단축), f=0.80/r=4 → 2.500배(60% 단축). **위 수치는 측정 결과도 개선 약속도 아닌 계산 예시**입니다. 실측 f가 없으면 저장소 전체의 추가 가능 배수는 제시할 수 없습니다. 여러 단계 국소 개선 배수를 곱하면 안 됩니다.
+
+**Roofline:** CPU 작업량뿐 아니라 메모리/디스크/네트워크 트래픽이 병목일 수 있습니다. **Little:** 안정된 작업계에서 동시 작업수 L=요청 도착률 λ×평균 체류시간 W이며, 작업자 수의 무조건적인 증가는 RAM·대기열과 p95를 악화시킬 수 있습니다. 최소 5회 동일 입력·동일 장비에서 E2E wall time·단계별 CPU·peak RSS·읽기/쓰기 bytes·처리량·p50/p95를 모두 관측합니다. 벤치마크 기록이 없는 개선률은 **미측정**입니다.
+
+검증된 1차 문헌: [Amdahl (1967)](https://doi.org/10.1145/1465482.1465560), [Roofline (2009)](https://zenodo.org/records/1236156), [Little (1961)](https://doi.org/10.1287/opre.9.3.383), [Dean & Barroso (2013), The Tail at Scale](https://research.google/pubs/the-tail-at-scale/), [Google Benchmark Guide](https://google.github.io/benchmark/user_guide.html). 논문에 기재된 **다른 시스템의 가속 배수**는 이 프로그램에서 실현 가능한 개선치로 옮겨 적지 않습니다.
+
+### 재검토 방법과 수행 범위
+
+**1차 100회**는 기존 코드/벤치마크 기반 후보·명령·향상률 주장·복잡도 경계를 다른 입력 크기·작업자 수·병목 구성 조건으로 반복 검산한 **정적·수치 검토**입니다. **2차 100회**는 1차 문헌을 반영해 Amdahl, Roofline, Little 및 동일 성능 단위 기준을 서로 다른 모형 파라미터로 교차 검산한 **학술·수학적 정합성 검토**입니다. 이는 각 문서에 별도로 시행한 100+100 반복 라운드입니다. **200번의 독립적인 전 코드 정독, 실기 벤치마크 200회, 논문 전체 실험 재현을 의미하지 않습니다.** 실제 추가 개선율은 코드 수정 전후의 재현 가능한 성능 시험 없이는 확정할 수 없습니다.
