@@ -280,3 +280,58 @@ cargo clippy --locked --manifest-path rust-app/Cargo.toml --all-targets -- -D wa
 관련 근거: [Aggarwal–Vitter 외부 메모리 I/O 모델](https://research.ibm.com/publications/the-inputoutput-complexity-of-sorting-and-related-problems)은 디스크 모델의 입출력 하한으로, Python/Rust 실제 폴더 탐색의 보장 속도가 아닙니다.
 
 ---
+
+## 7.9 DIVERSE PERFORMANCE REVIEW — 1,000 feasibility + 1,000 cross-disciplinary evaluations (2026-11-12)
+
+### 1,000 rounds mean **1,000 combinations**, not 1,000 new features
+
+Actual deterministic Python screening performed: **10 existing-code-anchored approaches × 10 workloads × 10 distinct feasibility constraints = 1,000 tuples**, plus **10 approaches × 10 workloads × 10 distinct research lenses = 1,000 tuples**. Every combination is unique within its phase; 2,000 evaluated tuples per repository, 12,000 across all six. A second execution reproduced the summary digest. `run_diverse_1000.py` SHA-256 `caecadb0696142bca8de43e1ae440152015459e8e90e8c418e9909c8a1b82de9`, summary `summary_6repos.json` SHA-256 `23e3ab0a3a456c954dc7f42a0df115dd9ad26fb81b6aa73c4b74850121fd98d0`. Workload axes: short cold, small warm, standard, high count, repeated, long RTT, memory pressure, UI churn, slow disk, 16-worker contention. Constraint axes: exact outputs, new dependencies, portability, memory headroom, tail latency, cold path, cancellation, crash recovery, throughput, additional I/O.
+
+**Validation boundaries:** These are **synthetic design-feasibility calculations and mathematical-relevance checks**, not 2,000 actual executable/CPU benchmarks, 2,000 source diff manual reviews, or 2,000 novel papers read. Status labels are screening outcomes **not verification of implementation or achieved speed**. The rows and hashes can be reproduced with the separately provided evidence ZIP; audit source is not committed to this code repository.
+
+### Ten new viewpoints beyond the older Amdahl / Roofline / Little-only treatment
+
+1. [Parallel work/span and work stealing](https://doi.org/10.1145/324133.324234)
+2. [Cache-oblivious locality](https://www.fftw.org/~athena/abstracts/abstract12.html)
+3. [Amortization of repeated work](https://en.wikipedia.org/wiki/Amortized_analysis)
+4. [Bloom false-positive negative-filter](https://doi.org/10.1145/362686.362692)
+5. [Roaring bitmap intersection](https://doi.org/10.1002/spe.2402)
+6. [Boyer–Moore pattern matching](https://doi.org/10.1145/359842.359859)
+7. [Paired common-random-number experiments](https://doi.org/10.1287/mnsc.41.12.1935)
+8. [Bandwidth-delay product and strong Range](https://www.rfc-editor.org/rfc/rfc9110.html)
+9. [Top-Down microarchitecture bottlenecks](https://doi.org/10.1109/ISPASS.2014.6844459)
+10. [Browser INP interaction latency](https://web.dev/articles/inp)
+
+A lens can be **useful**, **indirect**, or **not-relevant**. Inapplicable ideas are explicitly rejected for an approach: e.g., Roaring is not a proof of benefit for tiny ephemeral filters; Bloom can reject absent keys but positive results require exact verification; CRN affects *experiment variance*, not application throughput; the bandwidth-delay product is only relevant to transport; INP is not a video encoding speed measurement. Additional math conditions: work/span lower bound T_P ≥ max(T₁/P, T∞), precompute amortization only when repeats × saved-query-work > setup, Bloom false positive probability approximately (1−e^(−kn/m))^k under ideal assumptions, and HTTP pipeline BDP = RTT × goodput.
+
+### Review matrix result (not a measured performance success rate)
+
+| Phase | Model classifications (sum 1,000) |
+|---|---|
+| Engineering constraints | prototype-after-profiling 70; conditional-prototype 470; guard-required 55; low-priority 202; measure-first 3; reject-contract-change 100; existing-not-additional 100 |
+| Research relevance | useful 360; indirect 280; not-relevant 360 |
+
+**Engineering evidence SHA-256:** `1b3c93109b44e2873b2932e2bfdaede1376a60f32f2f85df37af68e9864057c8`. **Theory-relevance evidence SHA-256:** `78d3ae097f4c4d5548233fe6277efc40ba902a70d523f24e39e1e0e311c97dc2`. Hashes are for each 1,000-row canonical JSON list of method/workload/lens outcomes.
+
+### Different solution approaches: does the code permit a safe experiment?
+
+| ID | Technique | Checked source anchor | Feasibility | Necessary workload | What can invalidate this approach |
+|---|---|---|---|---|---|
+| F-ALT-01 | Volume-aware bounded concurrent hashing | [`folder_organizer/matching.py`](https://github.com/P-JSL/Folder_Organizer/blob/b19583a2c8a51b8e590a63634d92070c0f5efeb0/folder_organizer/matching.py) | **Conditional** | Multiple independent volumes vs one HDD | Current thread-local metrics and hash snapshots must be explicitly merged |
+| F-ALT-02 | Size and sampled-hash pregrouping | [`folder_organizer/matching.py`](https://github.com/P-JSL/Folder_Organizer/blob/b19583a2c8a51b8e590a63634d92070c0f5efeb0/folder_organizer/matching.py) | **Already implemented** | Compare existing sample stage cost only | Do not promise a second new speedup for existing work |
+| F-ALT-03 | Single-scan verified SHA reuse | [`folder_organizer/matching.py`](https://github.com/P-JSL/Folder_Organizer/blob/b19583a2c8a51b8e590a63634d92070c0f5efeb0/folder_organizer/matching.py) | **Conditional** | Same source appears repeatedly within a scan | File identity and generation must match; timestamp alone insufficient |
+| F-ALT-04 | Hard-link/inode-aware scan de-dup | [`folder_organizer/scanner.py`](https://github.com/P-JSL/Folder_Organizer/blob/b19583a2c8a51b8e590a63634d92070c0f5efeb0/folder_organizer/scanner.py) | **Conditional** | Stable filesystem IDs and duplicate hard links | Path counts/output order must still be preserved |
+| F-ALT-05 | SIMD final byte comparison | [`rust-app/src/core.rs`](https://github.com/P-JSL/Folder_Organizer/blob/b19583a2c8a51b8e590a63634d92070c0f5efeb0/rust-app/src/core.rs) | **Prototype after profiling** | Large verified SHA groups with byte compare dominant | Handle short tail, no omission of exact proof |
+| F-ALT-06 | Cache-friendly directory walk | [`folder_organizer/scanner.py`](https://github.com/P-JSL/Folder_Organizer/blob/b19583a2c8a51b8e590a63634d92070c0f5efeb0/folder_organizer/scanner.py) | **Conditional** | Slow seeks/metadata-heavy tree | Filesystem directory order is not guaranteed physical ordering |
+| F-ALT-07 | Qt visible-row rendering | [`folder_organizer/ui.py`](https://github.com/P-JSL/Folder_Organizer/blob/b19583a2c8a51b8e590a63634d92070c0f5efeb0/folder_organizer/ui.py) | **Prototype after profiling** | Tens of thousands of rows, UI p95 bound | Existing sort key cache must not be rebuilt |
+| F-ALT-08 | Bloom *negative* similarity prefilter | [`folder_organizer/matching.py`](https://github.com/P-JSL/Folder_Organizer/blob/b19583a2c8a51b8e590a63634d92070c0f5efeb0/folder_organizer/matching.py) | **Conditional** | High sparsity of similarity keys | Bloom positives must be checked; no false negatives or lost candidates |
+| F-ALT-09 | Journal flush delay/batching | [`folder_organizer/recovery.py`](https://github.com/P-JSL/Folder_Organizer/blob/b19583a2c8a51b8e590a63634d92070c0f5efeb0/folder_organizer/recovery.py) | ****Reject** under durability contract** | Only after user explicitly permits weaker crash durability | Could lose protected delete/restore records |
+| F-ALT-10 | Change-journal driven incremental refresh | [`folder_organizer/multiroot.py`](https://github.com/P-JSL/Folder_Organizer/blob/b19583a2c8a51b8e590a63634d92070c0f5efeb0/folder_organizer/multiroot.py) | **Conditional** | Repeated scan with reliable changed-file identity | Network share, journal gap and restart force safe full rescan |
+
+### Recommended order and decision gates
+
+**Ranked experiments:** measure (1) volume-specific requested/physical read bytes and 1/2/4 bounded workers on HDD/SSD/NAS; (2) duplicate SHA groups and Rust final byte compare with SIMD prototype; (3) Qt row construction on 20k/100k rows. Reuse existing sample-hash prefilter without double counting. **Rejection:** dropping actual-byte verification, raw cache reuse across file mutation, or weakening signed crash journal. Bloom filter's formal false positives are safe only as an extra *negative* prefilter that never drops true candidates.
+
+Additional original references: [Bloom's original analysis](https://doi.org/10.1145/362686.362692), [Frigo's cache-oblivious I/O locality](https://www.fftw.org/~athena/abstracts/abstract12.html), [Blumofe–Leiserson work stealing](https://doi.org/10.1145/324133.324234).
+
+**Mandatory adoption protocol:** compare baseline and prototype with the exact same input/source hashes, OS, CPU, build flags and dataset, alternating baseline/candidate at least five complete runs each; report cold/warm end-to-end time, p50/p95, bytes read/written, peak RSS/JS heap, and output equivalence. Numerical asymptotic improvements and reference papers do **not** establish achievable speedups before full execution. **No whole-program prospective speedup is quantified** because the cost share of the relevant hot path has not been profiled.
