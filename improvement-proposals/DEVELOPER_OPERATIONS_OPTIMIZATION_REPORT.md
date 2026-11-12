@@ -2,9 +2,9 @@
 
 **저장소:** [P-JSL/Folder_Organizer](https://github.com/P-JSL/Folder_Organizer)  
 **소스 분석 기준:** `main` / [`f74aff3e3e3f56a95fde15cb24d35ba78fee5b59`](https://github.com/P-JSL/Folder_Organizer/commit/f74aff3e3e3f56a95fde15cb24d35ba78fee5b59)  
-**보고서 작성일:** 2026-11-11 (KST)  
+**보고서 초판:** 2026-11-11 (KST) · **교차 검증 갱신:** 2026-11-12 (KST)  
 **대상:** 개발자 · 운영자 · 릴리스 담당자  
-**개선 후보:** 5개 (우선순위·수정 위치·구현·검증·원복 기준 포함)  
+**누적 기존 IMP 개선 과제:** 8개 (초판 5개 포함, 별도 비성능 Q 제어/검토 항목 10개)  
 **상태:** 분석·구현 제안만 작성. 실제 소스 최적화·동적 성능 측정·프로그램 배포는 수행하지 않음.  
 > 문서 내 장·절 번호는 원래 6개 저장소 통합 보고서의 번호를 보존한 것입니다. 코드 근거 링크는 작성 시점의 커밋으로 고정했습니다.
 
@@ -335,3 +335,49 @@ A lens can be **useful**, **indirect**, or **not-relevant**. Inapplicable ideas 
 Additional original references: [Bloom's original analysis](https://doi.org/10.1145/362686.362692), [Frigo's cache-oblivious I/O locality](https://www.fftw.org/~athena/abstracts/abstract12.html), [Blumofe–Leiserson work stealing](https://doi.org/10.1145/324133.324234).
 
 **Mandatory adoption protocol:** compare baseline and prototype with the exact same input/source hashes, OS, CPU, build flags and dataset, alternating baseline/candidate at least five complete runs each; report cold/warm end-to-end time, p50/p95, bytes read/written, peak RSS/JS heap, and output equivalence. Numerical asymptotic improvements and reference papers do **not** establish achievable speedups before full execution. **No whole-program prospective speedup is quantified** because the cost share of the relevant hot path has not been profiled.
+
+## 7.10 NON-PERFORMANCE QUALITY / SECURITY / RELIABILITY REVIEW — 1,000 + 1,000 scenario screenings (2026-11-12)
+
+### Method and evidence boundary
+
+On 2026-11-12, a deterministic Python model actually generated **1,000 Phase-I rows** (10 repo-specific controls × 10 failure types × 10 operating environments) and **1,000 Phase-II rows** (10 controls × 10 different assurance methods × 10 quality attributes) for **each repository**. Across six repositories: **12,000 separate screening combinations**. A second script execution reproduced the same summary SHA-256. This **does not** mean 12,000 program runs, 12,000 independent code reviews, 12,000 demonstrated vulnerabilities or 12,000 passing security tests. Synthetic scenario classifications prioritize design/test work only.
+
+Phase I failures: invalid input, corruption, denied permissions, concurrent changes, interrupted operation, stale version, authentication/transport error, untrusted content, platform incompatibility and partial write/restore. Phase II techniques: QuickCheck-style property testing, metamorphic tests, state-machine checks, fault injection, STRIDE, NIST SSDF, OWASP ASVS 5.0, SLSA provenance, WCAG 2.2, and differential engine/output parity. Inapplicable methods are marked **not relevant**, not forcibly applied.
+
+Evidence package, produced separately from GitHub: `review_nonperformance_1000x2.py` SHA-256 `3168cd9f7c938c391ff057280fab9a88fd61b86d42b5fba732d564627d22c5da`; summary `summary_6repos_nonperformance.json` SHA-256 `e823ec751b255943238598c3a4289f67482d3d8019d5b8bb3e443425a157131b`. Each stored JSONL contains 1,000 canonical decision rows. No application code was changed or executed by these document-only commits. 'Existing' describes a targeted code safeguard; it does not certify the wider threat.
+
+Quality references, **not project certifications**: [ISO/IEC 25010:2023](https://www.iso.org/standard/78176.html), [NIST SP 800-218](https://csrc.nist.gov/pubs/sp/800/218/final), [OWASP ASVS 5.0](https://asvs.owasp.org/), [SLSA v1.2](https://slsa.dev/spec/v1.2/provenance), [WCAG 2.2](https://www.w3.org/TR/WCAG22/), [Claessen & Hughes 2000](https://doi.org/10.1145/351240.351266).
+
+### 2,000 evaluated matrix cells, not a defect count
+
+- Phase I: 810 lower-priority, 120 existing-guard exercises, 70 new test proposals. Every category total is **1,000**.
+- Phase II: 55 recommended, 469 context-dependent, 476 not relevant. Every category total is **1,000**. A **not relevant** standard was not applied to an unrelated feature.
+- Screening counts **do not measure completeness, live security, or feature quality**. Repeat appearances of an existing issue across 100 input environments represent **one issue × 100 test situations**, not 100 defects.
+
+| ID | Quality contract | Current source assessment | Checked file | Scenario for a real test | Acceptance gate |
+|---|---|---|---|---|---|
+| Q-F01 | Exact duplicate proof | **existing** | [`folder_organizer/matching.py`](https://github.com/P-JSL/Folder_Organizer/blob/2ff7210825634d91ce80549fcf189863192ee5ff/folder_organizer/matching.py) | Same byte length but different content, hash alias | Deletion precondition requires SHA + actual bytes |
+| Q-F02 | Snapshot before operations | **existing** | [`folder_organizer/workspace_actions.py`](https://github.com/P-JSL/Folder_Organizer/blob/2ff7210825634d91ce80549fcf189863192ee5ff/folder_organizer/workspace_actions.py) | Source swapped between scan and action | Preflight rejects altered source and does not mutate |
+| Q-F03 | Symbolic/hard-link path boundary | **proposal** | [`folder_organizer/operations.py`](https://github.com/P-JSL/Folder_Organizer/blob/2ff7210825634d91ce80549fcf189863192ee5ff/folder_organizer/operations.py) | Symlink substitution and destination rename race | No filesystem escape or overwrite beyond authorized roots |
+| Q-F04 | Signed journal durability | **existing** | [`folder_organizer/operations.py`](https://github.com/P-JSL/Folder_Organizer/blob/2ff7210825634d91ce80549fcf189863192ee5ff/folder_organizer/operations.py) | Interrupted quarantine after intent durable | Recovery path remains traceable and tamper rejected |
+| Q-F05 | Multi-root failure isolation | **proposal** | [`folder_organizer/workspace_actions.py`](https://github.com/P-JSL/Folder_Organizer/blob/2ff7210825634d91ce80549fcf189863192ee5ff/folder_organizer/workspace_actions.py) | One root inaccessible during multi-root operation | No unrelated root affected; partial result explicit |
+| Q-F06 | One-click deletion wording | **proposal** | [`folder_organizer/ui.py`](https://github.com/P-JSL/Folder_Organizer/blob/2ff7210825634d91ce80549fcf189863192ee5ff/folder_organizer/ui.py) | First keeper selected, user assumes confirmation dialog | UI accurately describes that direct action has no extra prompt |
+| Q-F07 | Python and Rust result parity | **proposal** | [`rust-app/src/operations.rs`](https://github.com/P-JSL/Folder_Organizer/blob/2ff7210825634d91ce80549fcf189863192ee5ff/rust-app/src/operations.rs) | Same source roots with Unicode and alias paths | Common JSON contract, consistent restore action semantics |
+| Q-F08 | Update package verification | **existing** | [`folder_organizer/updater.py`](https://github.com/P-JSL/Folder_Organizer/blob/2ff7210825634d91ce80549fcf189863192ee5ff/folder_organizer/updater.py) | Replaced release asset, checksum mismatch | Reject bad ZIP; separate origin authentication from checksum |
+| Q-F09 | Compressed recovery payload | **existing** | [`tests/test_recovery_compaction.py`](https://github.com/P-JSL/Folder_Organizer/blob/2ff7210825634d91ce80549fcf189863192ee5ff/tests/test_recovery_compaction.py) | Partial write / corrupt packed object / name collision | No partial visible restore or silent loss of raw backup |
+| Q-F10 | Unicode & long-path portability | **proposal** | [`folder_organizer/scanner.py`](https://github.com/P-JSL/Folder_Organizer/blob/2ff7210825634d91ce80549fcf189863192ee5ff/folder_organizer/scanner.py) | Long Windows paths, decomposed Unicode, ADS | Stable scan IDs and no accidental cross-file merge |
+
+### Contradiction reconciliation — report versus source and related repositories
+
+1. **Historical proposal count**: header originally said 5; there are now **8 numbered IMP-F** items. New Q-F 10 controls are **not** 10 newly confirmed defects.
+2. The direct **first-file-preserving delete** path intentionally avoids an extra confirmation dialog in current UI. It still uses authenticated proofs and journal checks; neither 'every delete confirms again' nor 'no safety checks' is accurate.
+3. **Exact duplicates** need SHA plus byte comparison and fresh source identity. **Similar-file candidates** are heuristic; no similarity score or Bloom filter independently authorizes deletion.
+4. Python and Rust editions share contracts but differ in implementation and package. Cross-engine compatibility is a test requirement, not proven by passing one edition's unit tests.
+
+### What to implement or verify next
+
+- **P0:** no false-success result, no unauthenticated destructive mutation, no silent corruption, unsafe archive publication or source-index mix-up. Treat confirmed mismatches as open until a source fix passes CI.
+- **P1:** state-machine and fault-injection tests for cancel/restart/concurrency, source hash, update/provenance, permission denial and recovery. Separate existing guards from uncovered edge cases.
+- **P2:** accessibility and support diagnostics, parity, maintainability and release documentation. For Windows and Chrome UI, verify the real interaction, not only DOM presence.
+- Code changes, deployment and real fault-injection tests **have not been performed** in this report-only update. Preserve existing interface, journal and fail-closed contracts before approval.
+
