@@ -2,7 +2,7 @@
 
 Windows에서 폴더의 파일 정보를 확인하고, 중복·유사 검사부터 복사·이동·분류·복원까지 진행하는 데스크톱 앱입니다. **폴더 한 개 또는 여러 개를 같은 화면에서 분석·정리**하며, 개인 파일을 외부 서버에 업로드하지 않습니다.
 
-최신 정식 버전: **[v0.9.1 · Python / Rust](https://github.com/P-JSL/Folder_Organizer/releases/tag/v0.9.1)**
+최신 정식 버전: **[v0.9.2 · Python / Rust](https://github.com/P-JSL/Folder_Organizer/releases/tag/v0.9.2)**
 
 **이용은 권리자 P-JSL 본인과 명시적으로 서면 허락받은 사람에게만 허용됩니다.** 공개 저장소와 다운로드 제공은 이용·재배포 허락을 의미하지 않습니다. [LICENSE](LICENSE)를 확인하세요.
 
@@ -12,13 +12,13 @@ Windows 10/11 x64용입니다. 두 배포판 모두 별도 Python 설치 없이 
 
 | 배포판 | 다운로드 | 압축 해제 후 실행 파일 |
 | --- | --- | --- |
-| Python | [Windows ZIP](https://github.com/P-JSL/Folder_Organizer/releases/download/v0.9.1/FolderOrganizer-Windows-x64.zip) | `FolderOrganizer/FolderOrganizer.exe` |
-| Rust | [Windows ZIP](https://github.com/P-JSL/Folder_Organizer/releases/download/v0.9.1/FolderOrganizer-Rust-Windows-x64.zip) | `FolderOrganizerRust/FolderOrganizerRust.exe` |
+| Python | [Windows ZIP](https://github.com/P-JSL/Folder_Organizer/releases/download/v0.9.2/FolderOrganizer-Windows-x64.zip) | `FolderOrganizer/FolderOrganizer.exe` |
+| Rust | [Windows ZIP](https://github.com/P-JSL/Folder_Organizer/releases/download/v0.9.2/FolderOrganizer-Rust-Windows-x64.zip) | `FolderOrganizerRust/FolderOrganizerRust.exe` |
 
 1. 원하는 배포판의 ZIP **전체를 새 폴더에 압축 해제**합니다.
 2. 표에 안내된 실행 파일을 엽니다. 함께 들어 있는 도우미·라이선스 파일과 Python판의 `_internal` 폴더를 유지하세요.
 
-체크섬은 [릴리즈의 `SHA256SUMS.txt`](https://github.com/P-JSL/Folder_Organizer/releases/download/v0.9.1/SHA256SUMS.txt), 빌드 정보와 확인 범위는 [실제 배포 결과](docs/RELEASE_RESULTS_0.9.1.md)에서 확인할 수 있습니다. 현재 실행 파일은 코드 서명되지 않아 Windows에서 게시자 확인 알림이 표시될 수 있습니다.
+체크섬은 [릴리즈의 `SHA256SUMS.txt`](https://github.com/P-JSL/Folder_Organizer/releases/download/v0.9.2/SHA256SUMS.txt), 빌드 정보와 확인 범위는 [실제 배포 결과](docs/RELEASE_RESULTS_0.9.2.md)에서 확인할 수 있습니다. 현재 실행 파일은 코드 서명되지 않아 Windows에서 게시자 확인 알림이 표시될 수 있습니다.
 
 ## 처음 사용하는 순서
 
@@ -133,7 +133,7 @@ CLI는 파일을 정리하지 않습니다. `--exclude`로 제외 패턴을 반�
 | 검사·분류 기준 | [중복과 유사](docs/DUPLICATES_AND_SIMILARITY.md) · [자동 분류 규칙](docs/AUTOMATIC_CLASSIFICATION.md) |
 | 기술·진단 | [통합 분석](docs/MULTIROOT_ANALYSIS.md) · [성능과 한계](docs/PERFORMANCE.md) · [로그](docs/LOGGING.md) |
 | 설계·개선 계획 | [상용 프로그램 비교](docs/COMPETITIVE_ANALYSIS.md) · [1.0.0 준비 기준](docs/V1_READINESS.md) |
-| 버전·배포 기록 | [변경 내역](CHANGELOG.md) · [0.9.1 배포 결과](docs/RELEASE_RESULTS_0.9.1.md) · [이전 배포 파일](DOWNLOADS/README.md) |
+| 버전·배포 기록 | [변경 내역](CHANGELOG.md) · [0.9.1 배포 결과](docs/RELEASE_RESULTS_0.9.2.md) · [이전 배포 파일](DOWNLOADS/README.md) |
 | 개발·확인 원칙 | [배포·확인 정책](docs/RELEASE_POLICY.md) · [기존 45건 확인 결과](docs/WORKSPACE_ACTION_RESULTS.md) |
 
 기존에 통과한 검사와 수정하지 않은 기능의 검사는 반복하지 않으며, 화면 캡처는 기본적으로 생략합니다. 이전 버전의 상세 변경 내역과 측정 결과는 위 문서에서 확인할 수 있습니다.

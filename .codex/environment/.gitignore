@@ -1,0 +1,10 @@
+state/
+media/
+native/
+certs/
+*.qcow2
+*.img
+*.iso
+credentials.json
+*unattend*.xml
+*.log
