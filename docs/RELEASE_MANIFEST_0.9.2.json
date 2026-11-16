@@ -1,0 +1,60 @@
+{
+  "version": "0.9.2",
+  "source_commit": "4755a8a9846860213c0ffdfe9f9a0cc5397a77d2",
+  "build_run": 43975293751,
+  "release_id": 447724998,
+  "release_url": "https://github.com/P-JSL/Folder_Organizer/releases/tag/v0.9.2",
+  "latest": true,
+  "application_implementation_unchanged_from": "v0.9.1",
+  "application_tests_rerun": false,
+  "application_execution": false,
+  "screenshots": false,
+  "scope": "Release metadata, downloaded artifact integrity and native executable format verification only.",
+  "packages": {
+    "FolderOrganizer-Windows-x64.zip": {
+      "bytes": 57452948,
+      "sha256": "52b530f71a837f060393a8e6410675707528018e2a16a67ba27e612e6338e25b",
+      "files": 249,
+      "crc_integrity": "passed",
+      "version_marker": "0.9.2",
+      "programs": {
+        "FolderOrganizer.exe": {
+          "sha256": "4426f6a27afafb14bafbb8caec660513b940a03a08b97de1231ebececf9d751f",
+          "architecture": "PE32+ x86_64",
+          "authenticode_certificate_present": false
+        },
+        "FolderOrganizerUpdater.exe": {
+          "sha256": "8416130c412f55b2243f14fe24a33b90e093611af3767e7aa5cc905a2b9a59cf",
+          "architecture": "PE32+ x86_64",
+          "authenticode_certificate_present": false
+        }
+      }
+    },
+    "FolderOrganizer-Rust-Windows-x64.zip": {
+      "bytes": 8849700,
+      "sha256": "c29d497ab1ddeb506fbed1ef5b2926f5be449541ea89c8ba94c735304194c0a9",
+      "files": 426,
+      "crc_integrity": "passed",
+      "version_marker": "0.9.2",
+      "programs": {
+        "FolderOrganizerRust.exe": {
+          "sha256": "3ece4976e80f1d696fdedb23bdd1a6ed1724d753bc66c105b2a52da360b1f7ee",
+          "architecture": "PE32+ x86_64",
+          "authenticode_certificate_present": false
+        },
+        "FolderOrganizerRustCLI.exe": {
+          "sha256": "342bab042dacea5d4428429a1b7af9b6fea7142206c99319dd5c09a85b376000",
+          "architecture": "PE32+ x86_64",
+          "authenticode_certificate_present": false
+        },
+        "FolderOrganizerRustUpdater.exe": {
+          "sha256": "e4ef6f51e152a76068cceb90e547fe49661076fb2a84cb5456d1ae0f58900bca",
+          "architecture": "PE32+ x86_64",
+          "authenticode_certificate_present": false
+        }
+      }
+    }
+  },
+  "environment_publication": "Draft saved; current chat has no environment publication tool.",
+  "windows_vm": "Desktop readiness and normal evaluation activation remain unresolved."
+}

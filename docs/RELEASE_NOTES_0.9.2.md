@@ -14,3 +14,9 @@ Python판과 Rust판은 별도 Windows x64 ZIP으로 제공합니다. 새 버전
 
 개인 VM 상태·비밀번호·설치 XML·디스크·로그는 릴리즈 소스와 첨부 파일에 포함하지 않습니다.
 앱 릴리즈 게시와 Codex 클라우드 환경 게시는 별개입니다.
+
+정식 빌드 소스: `4755a8a9846860213c0ffdfe9f9a0cc5397a77d2` ·
+[빌드·게시 실행](https://github.com/P-JSL/Folder_Organizer/actions/runs/43975293751).
+게시된 두 ZIP의 체크섬·버전·압축 무결성을 내려받아 확인했으며,
+[RELEASE_MANIFEST_0.9.2.json](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/RELEASE_MANIFEST_0.9.2.json)에
+자산·실행 파일 해시를 기록했습니다. 실행 파일 5개는 서명되지 않았습니다.
