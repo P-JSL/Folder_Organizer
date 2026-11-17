@@ -57,13 +57,7 @@ GitHub 저장소 → **Settings → Secrets and variables → Actions**:
 
 ## 3. 현재 저장소 빌드 경로
 
-| 워크플로 | EXE 처리 | 서명 적용 시점 |
-| --- | --- | --- |
-| `review-release.yml` | Python 2 + Rust 3 (v0.7.0) | ZIP·체크섬 생성 전, 실제 서명 상태는 외부 `BUILD_INFO.json`에 기록 |
-| `dual-release.yml` | Python 2 + Rust 3 | 각 실행 파일을 빌드·패키지 디렉터리에 배치한 뒤, ZIP 전 |
-| `version-release.yml` | Python 2 + Rust 3 | `package_version_release.py`의 ZIP 전 |
-| `rust-hotfix.yml` | Rust 3 | `windows_rust_hotfix_v6.py package` 전 |
-| `release.yml` | Python 2 (구버전 태그만) | ZIP 전 |
+현재 정식 Windows 배포는 `version-release.yml`을 사용합니다. Python 2개·Rust 3개 실행 파일을 빌드한 뒤, `package_version_release.py`가 ZIP·체크섬을 만들기 전에 서명합니다. 이전 버전 전용 워크플로는 해당 Git 태그의 기록입니다.
 
 서명 대상은 다음과 같습니다.
 - `FolderOrganizer.exe`

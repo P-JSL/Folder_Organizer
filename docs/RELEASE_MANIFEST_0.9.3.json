@@ -1,0 +1,74 @@
+{
+  "version": "0.9.3",
+  "source_commit": "3c73b0d6430bb30048302c6ffe541338bc2f1bd7",
+  "workflow_source_commit": "dcfcc12370a7175a5ae6b14acb2c83e515c1f4c9",
+  "build_run": 44015881068,
+  "release_id": 448120393,
+  "release_url": "https://github.com/P-JSL/Folder_Organizer/releases/tag/v0.9.3",
+  "latest": true,
+  "draft_validated": true,
+  "verified_operations_sha256": "2f0b5fcc8acc2854a36aa20067bc8848e931e85a52e20ee289bc33c612c756ba",
+  "retained_passed_cases": {
+    "linux_simulated": 17,
+    "windows_pe_ntfs": 11
+  },
+  "python_binary_guard_presence": true,
+  "python_binary_guard_call_sites": {
+    "build_plan": 1,
+    "build_routed_plan": 1,
+    "_copy_verified": 2,
+    "_retain_verified": 2
+  },
+  "application_tests_rerun": false,
+  "application_execution": false,
+  "screenshots": false,
+  "native_efs_or_full_gui_validation": false,
+  "packages": {
+    "FolderOrganizer-Windows-x64.zip": {
+      "bytes": 57452242,
+      "sha256": "05bb61ebcce70655edf1475c6d63695e5c1da97764bb2a7e70b8ed6257fe2909",
+      "files": 249,
+      "crc_integrity": "passed",
+      "version_marker": "0.9.3",
+      "programs": {
+        "FolderOrganizer.exe": {
+          "sha256": "0e72cba6c4f09a45a4d9e59831a10a3c1cc76ab51fd1ab4830c2c0c9ea277ecc",
+          "architecture": "PE32+ x86_64",
+          "authenticode_certificate_present": false
+        },
+        "FolderOrganizerUpdater.exe": {
+          "sha256": "13582c01442d417e310b9d226b47441765d7e31c5b8a5bfbd6223f4bee1b94a0",
+          "architecture": "PE32+ x86_64",
+          "authenticode_certificate_present": false
+        }
+      }
+    },
+    "FolderOrganizer-Rust-Windows-x64.zip": {
+      "bytes": 8850469,
+      "sha256": "32681287b0bbe298f2ace7147005723ded4a9d5c022c67eb60264866d8362c2d",
+      "files": 426,
+      "crc_integrity": "passed",
+      "version_marker": "0.9.3",
+      "programs": {
+        "FolderOrganizerRust.exe": {
+          "sha256": "a8cb1af4a313cd1bbc1a7cacf8aef2192f5d26429995a4cb04b5478d6dbc44f3",
+          "architecture": "PE32+ x86_64",
+          "authenticode_certificate_present": false
+        },
+        "FolderOrganizerRustCLI.exe": {
+          "sha256": "e862d1e1034423ad05c43b535589f1d6f81b2594d39e7ec75aa93db524b42c89",
+          "architecture": "PE32+ x86_64",
+          "authenticode_certificate_present": false
+        },
+        "FolderOrganizerRustUpdater.exe": {
+          "sha256": "53d8383495a6fde490e03199a2f64fe9b232918bb10f13158cc8b8c568e8725b",
+          "architecture": "PE32+ x86_64",
+          "authenticode_certificate_present": false
+        }
+      }
+    }
+  },
+  "scope": "Pinned source, retained evidence binding, downloaded archive integrity, native PE format and embedded Python code inspection only.",
+  "published": true,
+  "published_at": "2026-11-17T04:20:49Z"
+}

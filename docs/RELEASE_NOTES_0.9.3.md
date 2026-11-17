@@ -18,3 +18,7 @@ EFS 암호화 특성의 보존을 확인하지 않고 성공 처리할 수 있�
 Python판과 Rust판은 별도 Windows x64 ZIP으로 제공합니다. 두 ZIP의 체크섬은
 `SHA256SUMS.txt`에서 확인하세요. 이 릴리즈는 클라우드 VM의 바탕화면·평가판
 활성화·공유 뷰어 문제가 해결됐다는 뜻이 아니며, 환경 게시는 수행하지 않습니다.
+
+정식 빌드·태그 소스: `3c73b0d6430bb30048302c6ffe541338bc2f1bd7` · [성공한 빌드](https://github.com/P-JSL/Folder_Organizer/actions/runs/44015881068).
+
+게시 전 ZIP·체크섬·버전·압축 무결성과 Python EXE의 보호 코드 포함 여부를 확인했습니다. 실행 파일 5개는 서명되지 않았습니다. 자세한 출처·해시는 [배포 기록](https://github.com/P-JSL/Folder_Organizer/blob/main/docs/RELEASE_RESULTS_0.9.3.md)에 보존합니다.
