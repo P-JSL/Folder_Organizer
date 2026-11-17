@@ -2,6 +2,11 @@ name: Python and Rust package release
 run-name: Release ${{ github.ref_name }} · reuse passed checks
 on:
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: 'Immutable version tag to package; leave empty when dispatching from the tag'
+        required: false
+        default: ''
 permissions:
   contents: write
 jobs:
@@ -11,9 +16,12 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Preserve verified repository bytes on Windows
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.source_ref || github.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -23,12 +31,18 @@ jobs:
         run: |
           $record = Get-Content docs/WINDOWS_TRANSFER_METADATA_RESULTS.json -Raw | ConvertFrom-Json
           $actual = (Get-FileHash -LiteralPath $record.source_file -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Output "Verified source SHA256: $actual"
           if ($actual -cne $record.fixed_source_sha256) { throw 'Source differs from the verified Windows fix' }
           foreach ($batch in $record.windows_native.batches) {
             if ($batch.hashes.fixed -cne $actual -or $batch.cases.fixed.exit_code -ne 0) {
               throw 'Retained native Windows result is not a passing result for this exact source'
             }
           }
+          $version = (Get-Content version.json -Raw | ConvertFrom-Json).version
+          $source = (git rev-parse HEAD).Trim()
+          $tagSource = (git rev-parse "v$version^{commit}").Trim()
+          if ($LASTEXITCODE -ne 0 -or $source -cne $tagSource) { throw 'Checkout must match the immutable version tag' }
+          Write-Output "Exact build source: $source"
       - name: Install packaging dependencies only
         run: python -m pip install -e ".[bundle]"
       - name: Install pinned Rust compiler
@@ -70,7 +84,8 @@ jobs:
         run: |
           $version = (Get-Content version.json -Raw | ConvertFrom-Json).version
           $tag = "v$version"
-          gh release create $tag FolderOrganizer-Windows-x64.zip FolderOrganizer-Rust-Windows-x64.zip SHA256SUMS.txt --repo P-JSL/Folder_Organizer --draft --verify-tag --target $env:GITHUB_SHA --title "Folder Organizer $tag · Python / Rust" --notes-file "docs/RELEASE_NOTES_$version.md"
+          $source = (git rev-parse HEAD).Trim()
+          gh release create $tag FolderOrganizer-Windows-x64.zip FolderOrganizer-Rust-Windows-x64.zip SHA256SUMS.txt --repo P-JSL/Folder_Organizer --draft --verify-tag --target $source --title "Folder Organizer $tag · Python / Rust" --notes-file "docs/RELEASE_NOTES_$version.md"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           gh release edit $tag --repo P-JSL/Folder_Organizer --draft=false --latest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
