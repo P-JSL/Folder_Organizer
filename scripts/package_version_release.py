@@ -1,4 +1,4 @@
-"""Package version-only Windows builds without running tests or applications."""
+"""Package verified Windows builds without running tests or applications."""
 from __future__ import annotations
 
 import hashlib

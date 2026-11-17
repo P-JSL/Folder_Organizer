@@ -1,0 +1,73 @@
+{
+  "schema": "folder-organizer.windows-transfer-metadata-review.v1",
+  "review_date_kst": "2026-11-17",
+  "baseline_commit": "6a42a74b52e2902b2b46e933f8fd9f152719570f",
+  "source_file": "folder_organizer/operations.py",
+  "fixed_source_sha256": "2f0b5fcc8acc2854a36aa20067bc8848e931e85a52e20ee289bc33c612c756ba",
+  "new_tests_file": "tests/test_transfer_metadata_guard.py",
+  "linux_simulated_metadata": {
+    "before": {
+      "failed": 13,
+      "passed": 4
+    },
+    "after": {
+      "passed": 17
+    }
+  },
+  "windows_native": {
+    "before_expected_failures": 7,
+    "after_passed_unique_cases": 11,
+    "batches": [
+      {
+        "attempt": "native-runtime-2",
+        "platform": "win32",
+        "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+        "windows": "sys.getwindowsversion(major=10, minor=0, build=26100, platform=2, service_pack='')",
+        "runtime": "Windows PE native APIs and installed NTFS volume; no full desktop claim",
+        "test_work_directory": "C:\\CloudVMDiagnostics\\fo-streams-td5v_vj_",
+        "cases": {
+          "baseline": {
+            "exit_code": 1,
+            "output": "FFFFF                                                                    [100%]\n================================== FAILURES ===================================\n___ test_native_named_stream_is_refused_without_losing_either_stream[-copy] ___\nF:\\tests\\test_transfer_metadata_guard.py:111: in test_native_named_stream_is_refused_without_losing_either_stream\n    with pytest.raises(ops.OperationError):\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   Failed: DID NOT RAISE <class 'folder_organizer.operations.OperationError'>\n___ test_native_named_stream_is_refused_without_losing_either_stream[-move] ___\nF:\\tests\\test_transfer_metadata_guard.py:111: in test_native_named_stream_is_refused_without_losing_either_stream\n    with pytest.raises(ops.OperationError):\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   Failed: DID NOT RAISE <class 'folder_organizer.operations.OperationError'>\n_ test_native_named_stream_is_refused_without_losing_either_stream[private stream data-copy] _\nF:\\tests\\test_transfer_metadata_guard.py:111: in test_native_named_stream_is_refused_without_losing_either_stream\n    with pytest.raises(ops.OperationError):\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   Failed: DID NOT RAISE <class 'folder_organizer.operations.OperationError'>\n_ test_native_named_stream_is_refused_without_losing_either_stream[private stream data-move] _\nF:\\tests\\test_transfer_metadata_guard.py:111: in test_native_named_stream_is_refused_without_losing_either_stream\n    with pytest.raises(ops.OperationError):\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   Failed: DID NOT RAISE <class 'folder_organizer.operations.OperationError'>\n_____ test_native_late_stream_with_unchanged_primary_metadata_is_refused ______\nF:\\tests\\test_transfer_metadata_guard.py:128: in test_native_late_stream_with_unchanged_primary_metadata_is_refused\n    assert result[\"status\"] == \"failed\"\nE   AssertionError: assert 'completed' == 'failed'\nE     \nE     - failed\nE     + completed\n---------------- generated xml file: D:\\baseline-transfer.xml -----------------\n=========================== short test summary info ===========================\nFAILED ::test_native_named_stream_is_refused_without_losing_either_stream[-copy]\nFAILED ::test_native_named_stream_is_refused_without_losing_either_stream[-move]\nFAILED ::test_native_named_stream_is_refused_without_losing_either_stream[private stream data-copy]\nFAILED ::test_native_named_stream_is_refused_without_losing_either_stream[private stream data-move]\nFAILED ::test_native_late_stream_with_unchanged_primary_metadata_is_refused\n5 failed, 21 deselected in 13.56s\n"
+          },
+          "fixed": {
+            "exit_code": 0,
+            "output": ".........                                                                [100%]\n------------------ generated xml file: D:\\fixed-transfer.xml ------------------\n9 passed, 17 deselected in 9.38s\n"
+          }
+        },
+        "hashes": {
+          "baseline": "5fd81a07c5d2c3e1d303780ad51b0a0f3d69f640482e144461af0b487146f005",
+          "fixed": "2f0b5fcc8acc2854a36aa20067bc8848e931e85a52e20ee289bc33c612c756ba"
+        }
+      },
+      {
+        "attempt": "native-races-3",
+        "platform": "win32",
+        "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+        "windows": "sys.getwindowsversion(major=10, minor=0, build=26100, platform=2, service_pack='')",
+        "runtime": "Windows PE native APIs and installed NTFS volume; no full desktop claim",
+        "test_work_directory": "C:\\CloudVMDiagnostics\\fo-streams-tqz1qnup",
+        "cases": {
+          "baseline": {
+            "exit_code": 1,
+            "output": "FF                                                                       [100%]\n================================== FAILURES ===================================\n_________ test_native_stream_added_during_copy_is_preserved_at_source _________\nF:\\tests\\test_transfer_metadata_guard.py:158: in test_native_stream_added_during_copy_is_preserved_at_source\n    with pytest.raises(ops.OperationError):\n         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nE   Failed: DID NOT RAISE <class 'folder_organizer.operations.OperationError'>\n_____ test_native_stream_added_at_move_capture_returns_complete_original ______\nF:\\tests\\test_transfer_metadata_guard.py:180: in test_native_stream_added_at_move_capture_returns_complete_original\n    assert result[\"status\"] != \"completed\"\nE   AssertionError: assert 'completed' != 'completed'\n---------------- generated xml file: D:\\baseline-transfer.xml -----------------\n=========================== short test summary info ===========================\nFAILED ::test_native_stream_added_during_copy_is_preserved_at_source - Failed...\nFAILED ::test_native_stream_added_at_move_capture_returns_complete_original\n2 failed, 26 deselected in 7.27s\n"
+          },
+          "fixed": {
+            "exit_code": 0,
+            "output": "..                                                                       [100%]\n------------------ generated xml file: D:\\fixed-transfer.xml ------------------\n2 passed, 26 deselected in 3.07s\n"
+          }
+        },
+        "hashes": {
+          "baseline": "5fd81a07c5d2c3e1d303780ad51b0a0f3d69f640482e144461af0b487146f005",
+          "fixed": "2f0b5fcc8acc2854a36aa20067bc8848e931e85a52e20ee289bc33c612c756ba"
+        }
+      }
+    ]
+  },
+  "total_fixed_unique_cases": 28,
+  "existing_test_suites_rerun": false,
+  "gui_or_distribution_executable_validation": false,
+  "native_efs_file_validation": false,
+  "rust_source_modified": false,
+  "new_release_or_environment_publication": false
+}

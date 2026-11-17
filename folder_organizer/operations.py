@@ -191,6 +191,23 @@ def _verify(path: Path, item: dict, *, identity: bool = True) -> dict:
     return current
 
 
+def _require_primary_stream_copy(path: Path) -> None:
+    """Refuse Windows properties our byte-only copy cannot represent.
+
+    Use the same fail-closed stream/EFS probe as recovery compaction. A
+    same-volume deletion rename retains the complete file and does not need
+    this restriction. Never infer stream absence from a failed enumeration.
+    """
+    from . import recovery_payload
+    try:
+        recovery_payload.compaction_preflight(path)
+    except recovery_payload.PayloadMetadataUnsupported as exc:
+        raise OperationError(
+            f"추가 데이터 스트림·암호화 특성을 안전하게 복사·이동할 수 없어 "
+            f"중단했습니다. 원본을 유지합니다: {path}. {exc}"
+        ) from exc
+
+
 def _unique(candidate: Path, reserved: set[str]) -> Path:
     original = candidate
     counter = 0
@@ -315,6 +332,8 @@ def build_plan(root: str | Path, paths: list[str], mode: str,
             target = _unique(target, reserved)
         if target in selected_paths:
             raise OperationError("대상이 다른 선택 파일과 충돌합니다.")
+        if mode != "quarantine":
+            _require_primary_stream_copy(source)
         fingerprint = _fingerprint(source)
         plan["items"].append({"source": str(source), "target": str(target),
                               "action": "copy" if mode == "copy" else "move", **fingerprint})
@@ -370,6 +389,7 @@ def build_routed_plan(root: str | Path, routes: list[dict], *,
             plan["warnings"].append(f"원본과 대상이 같아 건너뜀: {source.relative_to(directory)}")
             continue
         target = _unique(target, reserved)
+        _require_primary_stream_copy(source)
         fingerprint = _fingerprint(source)
         plan["items"].append({"source": str(source), "target": str(target), "action": action,
                               "rule": str(route.get("rule", "사용자 규칙"))[:200], **fingerprint})
@@ -599,6 +619,7 @@ def _copy_verified(source: Path, target: Path, item: dict,
                    on_failed_path: Callable[[str], None] | None = None) -> None:
     _safe_path(source, require=True)
     _safe_path(target)
+    _require_primary_stream_copy(source)
     _mkdir(target.parent)
     source_fd = os.open(source, os.O_RDONLY | _NOFOLLOW | _BINARY)
     target_fd: int | None = None
@@ -634,6 +655,7 @@ def _copy_verified(source: Path, target: Path, item: dict,
             _windows_file_times(target_fd, before)
         _verify(source, item)
         _verify(target, item, identity=False)
+        _require_primary_stream_copy(source)
         _sync_directory(target.parent)
     except BaseException:
         if target_fd is not None:
@@ -722,7 +744,8 @@ def _return_retained(holding: Path, original: Path) -> bool:
 
 
 def _retain_verified(path: Path, expected: dict, root: Path, operation_id: str,
-                     item: dict, field: str, save: Callable[[], None]) -> Path:
+                     item: dict, field: str, save: Callable[[], None], *,
+                     primary_stream_only: bool = False) -> Path:
     """Atomically retain bytes before removing a visible path, never unlink them.
 
     Even an edit/replacement after a final verification cannot destroy bytes:
@@ -731,6 +754,8 @@ def _retain_verified(path: Path, expected: dict, root: Path, operation_id: str,
     Files on another volume use a hidden retention folder beside that file.
     """
     _safe_path(path, require=True)
+    if primary_stream_only:
+        _require_primary_stream_copy(path)
     root_state = _state(root)
     state = root_state if path.parent.stat().st_dev == root_state.stat().st_dev else path.parent / STATE_DIRECTORY
     holding_directory = state / "retained" / operation_id
@@ -741,6 +766,8 @@ def _retain_verified(path: Path, expected: dict, root: Path, operation_id: str,
     _rename_anchored(path, holding)
     try:
         _verify(holding, expected)
+        if primary_stream_only:
+            _require_primary_stream_copy(holding)
     except (OSError, OperationError) as exc:
         restored = _return_retained(holding, path)
         item["recovery_path"] = str(holding)
@@ -944,7 +971,8 @@ def _execute_plan(plan: dict, *, progress_detail: Callable[[dict], None] | None 
                         _verify(target, item, identity=False)
                         _duplicate_guard(item, directory)
                         _retain_verified(source, item, directory, journal["id"], item,
-                                         "original_backup", lambda: _write_journal(journal_path, journal, key))
+                                         "original_backup", lambda: _write_journal(journal_path, journal, key),
+                                         primary_stream_only=True)
                         # A destination edited during the retire step is never the
                         # last original: the exact source is retained privately.
                         _verify(target, item, identity=False)

@@ -24,7 +24,7 @@ from PySide6.QtCore import QSettings
 from folder_organizer import __version__, updater
 from folder_organizer import updater_helper as helper
 
-PREVIOUS_VERSION = "0.9.1"
+PREVIOUS_VERSION = "0.9.2"
 
 
 @contextmanager
