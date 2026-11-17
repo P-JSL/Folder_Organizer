@@ -7,6 +7,10 @@ on:
         description: 'Immutable version tag to package; leave empty when dispatching from the tag'
         required: false
         default: ''
+      stage_only:
+        description: 'Upload exact packages to a prepared draft; leave final publication to the release operator'
+        type: boolean
+        default: false
 permissions:
   contents: write
 jobs:
@@ -80,15 +84,51 @@ jobs:
           )
       - name: Package both editions and generate release checksums
         run: python scripts/package_version_release.py
-      - name: Publish both editions as the new stable release
+      - name: Preserve exact package source receipt
+        shell: pwsh
+        run: |
+          $source = (git rev-parse HEAD).Trim()
+          $version = (Get-Content version.json -Raw | ConvertFrom-Json).version
+          $packages = @('FolderOrganizer-Windows-x64.zip', 'FolderOrganizer-Rust-Windows-x64.zip', 'SHA256SUMS.txt') | ForEach-Object {
+            @{name=$_; bytes=(Get-Item -LiteralPath $_).Length; sha256=(Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant()}
+          }
+          @{version=$version; source_commit=$source; workflow_source=$env:GITHUB_SHA; workflow_run=$env:GITHUB_RUN_ID; packages=@($packages)} |
+            ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 RELEASE_BUILD_INFO.json
+      - name: Preserve built packages before any release API call
+        uses: actions/upload-artifact@v4
+        with:
+          name: FolderOrganizer-release-packages
+          retention-days: 14
+          compression-level: 0
+          path: |
+            FolderOrganizer-Windows-x64.zip
+            FolderOrganizer-Rust-Windows-x64.zip
+            SHA256SUMS.txt
+            RELEASE_BUILD_INFO.json
+      - name: Stage or publish exact packages without replacing existing assets
+        env:
+          STAGE_ONLY: ${{ inputs.stage_only }}
         run: |
           $version = (Get-Content version.json -Raw | ConvertFrom-Json).version
           $tag = "v$version"
           $source = (git rev-parse HEAD).Trim()
-          gh release create $tag FolderOrganizer-Windows-x64.zip FolderOrganizer-Rust-Windows-x64.zip SHA256SUMS.txt --repo P-JSL/Folder_Organizer --draft --verify-tag --target $source --title "Folder Organizer $tag · Python / Rust" --notes-file "docs/RELEASE_NOTES_$version.md"
+          $existing = gh release view $tag --repo P-JSL/Folder_Organizer --json isDraft,targetCommitish,assets
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --repo P-JSL/Folder_Organizer --draft --verify-tag --target $source --title "Folder Organizer $tag · Python / Rust" --notes-file "docs/RELEASE_NOTES_$version.md"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $existing = gh release view $tag --repo P-JSL/Folder_Organizer --json isDraft,targetCommitish,assets
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $draft = $existing | ConvertFrom-Json
+          if (-not $draft.isDraft -or $draft.targetCommitish -cne $source -or $draft.assets.Count -ne 0) {
+            throw 'Expected an empty draft for the exact immutable source; refusing asset replacement'
+          }
+          gh release upload $tag FolderOrganizer-Windows-x64.zip FolderOrganizer-Rust-Windows-x64.zip SHA256SUMS.txt --repo P-JSL/Folder_Organizer
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          gh release edit $tag --repo P-JSL/Folder_Organizer --draft=false --latest
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($env:STAGE_ONLY -ne 'true') {
+            gh release edit $tag --repo P-JSL/Folder_Organizer --draft=false --latest
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - name: Preserve compiler cache
         if: always() && steps.rust_cache.outputs.cache-primary-key != '' && steps.rust_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
